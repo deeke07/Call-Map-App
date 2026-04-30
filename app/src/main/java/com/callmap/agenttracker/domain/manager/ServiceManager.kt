@@ -1,0 +1,10 @@
+package com.callmap.agenttracker.domain.manager
+
+import android.app.Service
+
+interface ServiceManager {
+    fun startServices()
+    fun stopServices()
+    fun handleServiceLifecycle(trackingEnabled: Boolean)
+    fun <T : Service> isServiceRunning(serviceClass: Class<T>): Boolean
+}

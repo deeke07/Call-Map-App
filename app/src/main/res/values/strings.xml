@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Call-Map</string>
+    <string name="accessibility_description">This service is required to monitor call events for tracking purposes.</string>
+    <string name="runtime_permissions_title">Runtime Permissions</string>
+    <string name="runtime_permissions_desc">We need the following permissions to ensure the app works correctly.</string>
+    <string name="special_permissions_title">Special Permissions</string>
+    <string name="special_permissions_desc">These permissions help the app run in the background and track activities effectively.</string>
+</resources>
