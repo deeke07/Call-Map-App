@@ -12,6 +12,7 @@ import com.callmap.agenttracker.data.local.entity.LocationEntity
 import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.manager.SyncManager
 import com.callmap.agenttracker.domain.repository.LocationRepository
+import com.callmap.agenttracker.domain.usecase.location.ShouldTrackLocationUseCase
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
 import dagger.hilt.android.AndroidEntryPoint
@@ -33,6 +34,9 @@ class LocationService : Service() {
 
     @Inject
     lateinit var syncManager: SyncManager
+
+    @Inject
+    lateinit var shouldTrackLocationUseCase: ShouldTrackLocationUseCase
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var fusedLocationClient: FusedLocationProviderClient
@@ -94,7 +98,12 @@ class LocationService : Service() {
                 while (isActive) {
                     val cycleStartTime = System.currentTimeMillis()
                     
-                    fetchAndProcessLocation()
+                    val registrationLatest = sessionManager.getRegistration().first()
+                    if (shouldTrackLocationUseCase(cycleStartTime, registrationLatest)) {
+                        fetchAndProcessLocation()
+                    } else {
+                        Log.d(TAG, "Skipping tracking cycle: Outside scheduled tracking window.")
+                    }
 
                     // Calculate drift to maintain exact interval
                     val fetchDuration = System.currentTimeMillis() - cycleStartTime

@@ -12,5 +12,8 @@ data class RegistrationResult(
     val locationOnCall: Boolean = true,
     val locationHighAccuracy: Boolean = false,
     val remoteLock: Boolean = false,
-    val lastSimId: String? = null
+    val lastSimId: String? = null,
+    val trackingDays: List<String> = emptyList(),
+    val trackingStartTime: String? = null,
+    val trackingEndTime: String? = null
 )

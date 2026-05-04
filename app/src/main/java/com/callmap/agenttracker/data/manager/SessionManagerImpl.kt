@@ -31,6 +31,9 @@ class SessionManagerImpl @Inject constructor(
         private val LOCATION_HIGH_ACCURACY = booleanPreferencesKey("location_high_accuracy")
         private val REMOTE_LOCK = booleanPreferencesKey("remote_lock")
         private val LAST_SIM_ID = stringPreferencesKey("last_sim_id")
+        private val TRACKING_DAYS = stringSetPreferencesKey("tracking_days")
+        private val TRACKING_START_TIME = stringPreferencesKey("tracking_start_time")
+        private val TRACKING_END_TIME = stringPreferencesKey("tracking_end_time")
         
         // Dynamic State Keys Prefix
         private const val STATE_PREFIX = "state_"
@@ -50,6 +53,9 @@ class SessionManagerImpl @Inject constructor(
             prefs[LOCATION_HIGH_ACCURACY] = registration.locationHighAccuracy
             prefs[REMOTE_LOCK] = registration.remoteLock
             prefs[LAST_SIM_ID] = registration.lastSimId ?: ""
+            prefs[TRACKING_DAYS] = registration.trackingDays.toSet()
+            prefs[TRACKING_START_TIME] = registration.trackingStartTime ?: ""
+            prefs[TRACKING_END_TIME] = registration.trackingEndTime ?: ""
         }
     }
 
@@ -68,7 +74,10 @@ class SessionManagerImpl @Inject constructor(
                 locationOnCall = prefs[LOCATION_ON_CALL] ?: true,
                 locationHighAccuracy = prefs[LOCATION_HIGH_ACCURACY] ?: true,
                 remoteLock = prefs[REMOTE_LOCK] ?: false,
-                lastSimId = prefs[LAST_SIM_ID]
+                lastSimId = prefs[LAST_SIM_ID],
+                trackingDays = prefs[TRACKING_DAYS]?.toList() ?: emptyList(),
+                trackingStartTime = prefs[TRACKING_START_TIME]?.ifEmpty { null },
+                trackingEndTime = prefs[TRACKING_END_TIME]?.ifEmpty { null }
             )
         }
     }

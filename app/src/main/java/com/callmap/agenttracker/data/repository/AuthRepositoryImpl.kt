@@ -34,6 +34,12 @@ class AuthRepositoryImpl @Inject constructor(
                         agentEmail = body.data.user?.email ?: "",
                         agentName = body.data.user?.name ?: "",
                         agentProfile = body.data.user?.profile ?: "",
+                        locationOnCall = body.data.settings?.locationOnCall ?: true,
+                        locationHighAccuracy = body.data.settings?.locationHighAccuracy ?: false,
+                        remoteLock = body.data.settings?.remoteLock ?: false,
+                        trackingDays = body.data.settings?.trackingDays ?: emptyList(),
+                        trackingStartTime = body.data.settings?.trackingStartTime,
+                        trackingEndTime = body.data.settings?.trackingEndTime
                     )
                     Log.e("result","$result")
                     sessionManager.saveRegistration(result)
