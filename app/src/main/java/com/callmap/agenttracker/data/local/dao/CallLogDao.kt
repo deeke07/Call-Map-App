@@ -12,6 +12,9 @@ interface CallLogDao {
     @Query("SELECT * FROM call_logs WHERE syncStatus = :status ORDER BY createdAt ASC")
     suspend fun getUnsyncedCallLogs(status: SyncStatus = SyncStatus.PENDING): List<CallLogEntity>
 
+    @Query("SELECT * FROM call_logs WHERE syncStatus IN ('PENDING', 'FAILED') ORDER BY (CASE WHEN syncStatus = 'PENDING' THEN 0 ELSE 1 END), createdAt ASC LIMIT :limit")
+    suspend fun getPendingCallLogsBatch(limit: Int): List<CallLogEntity>
+
     @Query("SELECT * FROM call_logs WHERE syncStatus = :status ORDER BY createdAt ASC LIMIT :limit")
     suspend fun getUnsyncedCallLogsBatch(status: SyncStatus, limit: Int): List<CallLogEntity>
 

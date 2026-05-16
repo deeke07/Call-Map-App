@@ -6,6 +6,7 @@ import com.callmap.agenttracker.data.local.AppDatabase
 import com.callmap.agenttracker.data.local.dao.CallLogDao
 import com.callmap.agenttracker.data.local.dao.DeviceEventDao
 import com.callmap.agenttracker.data.local.dao.LocationDao
+import com.callmap.agenttracker.data.manager.AlarmScheduler
 import com.callmap.agenttracker.data.manager.AppInitializerImpl
 import com.callmap.agenttracker.data.manager.EventManagerImpl
 import com.callmap.agenttracker.data.manager.ServiceManagerImpl
@@ -27,6 +28,8 @@ import com.callmap.agenttracker.domain.repository.AuthRepository
 import com.callmap.agenttracker.domain.repository.CallRepository
 import com.callmap.agenttracker.domain.repository.DeviceEventRepository
 import com.callmap.agenttracker.domain.repository.LocationRepository
+import com.callmap.agenttracker.domain.usecase.location.ShouldTrackLocationUseCase
+import com.callmap.agenttracker.domain.usecase.location.NextTriggerTimeCalculator
 import com.callmap.agenttracker.util.NetworkObserver
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
@@ -35,13 +38,25 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
+import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
+
+    @Provides
+    @Singleton
+    fun provideOkHttpClient(): OkHttpClient {
+        return OkHttpClient.Builder()
+            .connectTimeout(60, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(120, TimeUnit.SECONDS) // Extra time for audio uploads
+            .build()
+    }
 
     @Provides
     @Singleton
@@ -53,9 +68,10 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideAuthApi(gson: Gson): AuthApi {
+    fun provideAuthApi(gson: Gson, okHttpClient: OkHttpClient): AuthApi {
         return Retrofit.Builder()
             .baseUrl(AuthApi.BASE_URL)
+            .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
             .create(AuthApi::class.java)
@@ -63,9 +79,10 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideLocationApi(gson: Gson): LocationApi {
+    fun provideLocationApi(gson: Gson, okHttpClient: OkHttpClient): LocationApi {
         return Retrofit.Builder()
             .baseUrl(AuthApi.BASE_URL)
+            .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
             .create(LocationApi::class.java)
@@ -73,9 +90,10 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideCallApi(gson: Gson): CallApi {
+    fun provideCallApi(gson: Gson, okHttpClient: OkHttpClient): CallApi {
         return Retrofit.Builder()
             .baseUrl(AuthApi.BASE_URL)
+            .client(okHttpClient)
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
             .create(CallApi::class.java)
@@ -119,8 +137,13 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideSyncManager(@ApplicationContext context: Context): SyncManager {
-        return SyncManagerImpl(context)
+    fun provideSyncManager(
+        @ApplicationContext context: Context,
+        sessionManager: SessionManager,
+        nextTriggerCalculator: NextTriggerTimeCalculator,
+        alarmScheduler: AlarmScheduler
+    ): SyncManager {
+        return SyncManagerImpl(context, sessionManager, nextTriggerCalculator, alarmScheduler)
     }
 
     @Provides
@@ -131,8 +154,15 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideAppInitializer(impl: AppInitializerImpl): AppInitializer {
-        return impl
+    fun provideAppInitializer(
+        @ApplicationContext context: Context,
+        syncManager: SyncManager,
+        serviceManager: ServiceManager,
+        sessionManager: SessionManager,
+        callRepository: CallRepository,
+        shouldTrackLocationUseCase: ShouldTrackLocationUseCase
+    ): AppInitializer {
+        return AppInitializerImpl(context, syncManager, serviceManager, sessionManager, callRepository, shouldTrackLocationUseCase)
     }
 
     @Provides
@@ -168,13 +198,20 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideDeviceEventRepository(impl: DeviceEventRepositoryImpl): DeviceEventRepository {
-        return impl
+    fun provideDeviceEventRepository(
+        @ApplicationContext context: Context,
+        dao: DeviceEventDao,
+        api: CallApi,
+        sessionManager: SessionManager,
+        networkObserver: NetworkObserver,
+        gson: Gson
+    ): DeviceEventRepository {
+        return DeviceEventRepositoryImpl(context, dao, api, sessionManager, networkObserver, gson)
     }
 
     @Provides
     @Singleton
-    fun provideEventManager(impl: EventManagerImpl): EventManager {
-        return impl
+    fun provideEventManager(repository: DeviceEventRepository): EventManager {
+        return EventManagerImpl(repository)
     }
 }

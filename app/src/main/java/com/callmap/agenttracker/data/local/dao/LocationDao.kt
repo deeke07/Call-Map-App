@@ -12,6 +12,9 @@ interface LocationDao {
     @Query("SELECT * FROM locations WHERE syncStatus IN ('PENDING', 'FAILED') ORDER BY recordedAt ASC LIMIT :limit")
     suspend fun getUnsyncedLocations(limit: Int = 500): List<LocationEntity>
 
+    @Query("SELECT COUNT(*) FROM locations WHERE syncStatus IN ('PENDING', 'FAILED')")
+    suspend fun getUnsyncedCount(): Int
+
     @Query("UPDATE locations SET syncStatus = :status WHERE id IN (:ids)")
     suspend fun updateSyncStatus(ids: List<Long>, status: SyncStatus)
 

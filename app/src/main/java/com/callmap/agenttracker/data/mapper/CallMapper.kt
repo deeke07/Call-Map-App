@@ -8,50 +8,35 @@ data class ApiRequestModel(
     val call_type: String,
     val call_duration: Long,
     val call_recording_file: String?,
-    val call_answered_at: String?
+    val call_answered_at: String?,
+    val was_on_hold: String,
+    val interrupted_numbers: String?
 )
 
 object CallMapper {
     fun mapCallToApiModel(callLog: CallLogEntity): ApiRequestModel {
-        val hasAnsweredTimestamp = !callLog.callAnsweredAt.isNullOrEmpty()
-        val hasDuration = callLog.callDuration > 0
+        // A call is considered answered ONLY if it has a valid answered timestamp.
+        val isAnswered = !callLog.callAnsweredAt.isNullOrEmpty()
+        
         val fileExists = !callLog.recordingFilePath.isNullOrEmpty() && File(callLog.recordingFilePath).exists()
 
-        val isEffectivelyAnswered = hasAnsweredTimestamp && hasDuration && fileExists
-
-        var mappedType = when (callLog.callType) {
-            CallLog.Calls.INCOMING_TYPE -> if (isEffectivelyAnswered) "INCOMING" else "NO_ANSWER"
-            CallLog.Calls.OUTGOING_TYPE -> if (isEffectivelyAnswered) "OUTGOING" else "NO_ANSWER"
+        val mappedType = when (callLog.callType) {
+            CallLog.Calls.INCOMING_TYPE -> if (isAnswered) "INCOMING" else "NO_ANSWER"
+            CallLog.Calls.OUTGOING_TYPE -> if (isAnswered) "OUTGOING" else "NO_ANSWER"
             CallLog.Calls.MISSED_TYPE -> "MISSED"
-            CallLog.Calls.REJECTED_TYPE -> "REJECTED"
-            5 -> "REJECTED"
-            6 -> "REJECTED"
-            else -> if (isEffectivelyAnswered) "INCOMING" else "NO_ANSWER"
-        }
-
-        val finalDuration: Long
-        val finalRecording: String?
-        val finalAnsweredAt: String?
-
-        if (isEffectivelyAnswered) {
-            finalDuration = callLog.callDuration
-            finalRecording = callLog.recordingFilePath
-            finalAnsweredAt = callLog.callAnsweredAt
-        } else {
-            finalDuration = 0L
-            finalRecording = null
-            finalAnsweredAt = null
-            
-            if (mappedType == "INCOMING" || mappedType == "OUTGOING") {
-                mappedType = "NO_ANSWER"
-            }
+            CallLog.Calls.REJECTED_TYPE, 5 -> "REJECTED"
+            6 -> "BLOCKED"
+            else -> if (isAnswered) "INCOMING" else "NO_ANSWER"
         }
 
         return ApiRequestModel(
             call_type = mappedType,
-            call_duration = finalDuration,
-            call_recording_file = finalRecording,
-            call_answered_at = finalAnsweredAt
+            call_duration = callLog.callDuration,
+            // Only send the recording file if the call was actually answered
+            call_recording_file = if (isAnswered && fileExists) callLog.recordingFilePath else null,
+            call_answered_at = callLog.callAnsweredAt,
+            was_on_hold = if (callLog.wasOnHold) "1" else "0",
+            interrupted_numbers = callLog.interruptedNumbers
         )
     }
 }

@@ -4,7 +4,6 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.location.LocationManager
 import android.os.*
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -13,6 +12,7 @@ import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.manager.SyncManager
 import com.callmap.agenttracker.domain.repository.LocationRepository
 import com.callmap.agenttracker.domain.usecase.location.ShouldTrackLocationUseCase
+import com.callmap.agenttracker.receiver.ScheduleReceiver
 import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
 import dagger.hilt.android.AndroidEntryPoint
@@ -46,9 +46,12 @@ class LocationService : Service() {
     companion object {
         private const val TAG = "LocationService"
         private const val NOTIFICATION_ID = 12345
-        private const val CHANNEL_ID = "location_tracking_channel"
+        private const val CHANNEL_ID = "location_tracking_v4"
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
+        
+        // Threshold for switching from Loop to Alarm-based tracking (5 minutes)
+        private const val LONG_INTERVAL_THRESHOLD_MS = 5 * 60 * 1000L 
     }
 
     override fun onCreate() {
@@ -62,28 +65,32 @@ class LocationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> startTracking()
-            ACTION_STOP -> stopTracking()
+        val action = intent?.action
+        Log.d(TAG, "onStartCommand: action=$action, startId=$startId")
+
+        when (action) {
+            ACTION_STOP -> stopTracking(startId)
+            ACTION_START -> startTracking(startId)
+            else -> startTracking(startId) // Resumes on system restart
         }
         return START_STICKY
     }
 
-    private fun startTracking() {
-        // Always show/update notification to satisfy Foreground Service requirements
-        startForeground(NOTIFICATION_ID, createNotification())
+    private fun startTracking(startId: Int) {
+        if (wakeLock?.isHeld == false) wakeLock?.acquire(10000L)
 
-        // If a job is already running, we cancel it and start a fresh one to ensure 
-        // we respect any new frequency or tracking toggle changes immediately.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIFICATION_ID, createNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        } else {
+            startForeground(NOTIFICATION_ID, createNotification())
+        }
+
         trackingJob?.cancel()
-        
         trackingJob = serviceScope.launch {
             try {
-                Log.d(TAG, "Fetching registration for tracking start...")
                 val registration = sessionManager.getRegistration().first()
                 if (registration == null || !registration.trackingEnabled) {
-                    Log.w(TAG, "Tracking disabled in config. Stopping.")
-                    stopSelf()
+                    stopTracking(startId)
                     return@launch
                 }
 
@@ -93,67 +100,96 @@ class LocationService : Service() {
                     registration.locationFrequency
                 }
 
-                Log.i(TAG, "Strict Interval Loop Started: ${frequencyMillis / 1000}s")
-
-                while (isActive) {
-                    val cycleStartTime = System.currentTimeMillis()
-                    
-                    val registrationLatest = sessionManager.getRegistration().first()
-                    if (shouldTrackLocationUseCase(cycleStartTime, registrationLatest)) {
-                        fetchAndProcessLocation()
-                    } else {
-                        Log.d(TAG, "Skipping tracking cycle: Outside scheduled tracking window.")
-                    }
-
-                    // Calculate drift to maintain exact interval
-                    val fetchDuration = System.currentTimeMillis() - cycleStartTime
-                    val nextDelay = (frequencyMillis - fetchDuration).coerceAtLeast(2000L)
-                    
-                    Log.d(TAG, "Interval complete. Sleeping for ${nextDelay / 1000}s...")
-                    delay(nextDelay)
+                if (frequencyMillis >= LONG_INTERVAL_THRESHOLD_MS) {
+                    runLongIntervalStrategy(frequencyMillis, startId)
+                } else {
+                    runShortIntervalLoop(frequencyMillis, startId)
                 }
+
             } catch (e: Exception) {
                 if (e !is CancellationException) {
-                    Log.e(TAG, "Loop Error: ${e.message}. Retrying in 30s.", e)
+                    Log.e(TAG, "Tracking setup error", e)
                     delay(30000)
-                    startTracking() 
+                    startTracking(startId)
                 }
             }
         }
     }
 
-    private suspend fun fetchAndProcessLocation() {
-        // CPU must stay awake during the 5-25 seconds of GPS search
-        wakeLock?.acquire(30000L) 
+    private suspend fun runLongIntervalStrategy(intervalMs: Long, startId: Int) {
+        val now = System.currentTimeMillis()
+        val registration = sessionManager.getRegistration().first()
 
+        if (shouldTrackLocationUseCase(now, registration)) {
+            Log.i(TAG, "Long Interval Strategy: Fetching location fix...")
+            fetchAndProcessLocation()
+            
+            Log.i(TAG, "Scheduling next alarm-based fix in ${intervalMs / 1000}s. Service remains in foreground.")
+            scheduleNextAlarm(intervalMs)
+            
+            // We DO NOT call stopSelf or stopForeground here.
+            // This keeps the notification visible to the user at all times.
+        } else {
+            Log.d(TAG, "Outside tracking window. Stopping tracking service.")
+            stopTracking(startId)
+        }
+    }
+
+    private suspend fun runShortIntervalLoop(intervalMs: Long, startId: Int) {
+        Log.i(TAG, "Short Interval Loop: ${intervalMs / 1000}s")
+        while (true) {
+            yield()
+            val cycleStartTime = System.currentTimeMillis()
+            val registration = sessionManager.getRegistration().first()
+
+            if (shouldTrackLocationUseCase(cycleStartTime, registration)) {
+                fetchAndProcessLocation()
+                val fetchDuration = System.currentTimeMillis() - cycleStartTime
+                val nextDelay = (intervalMs - fetchDuration).coerceAtLeast(2000L)
+                delay(nextDelay)
+            } else {
+                stopTracking(startId)
+                break
+            }
+        }
+    }
+
+    private suspend fun fetchAndProcessLocation() {
+        if (wakeLock?.isHeld == false) wakeLock?.acquire(30000L)
         try {
             val cts = CancellationTokenSource()
-            
-            // getCurrentLocation forces the system to wake up GPS and get a FRESH fix.
-            // Unlike requestLocationUpdates, this won't "dump" multiple old locations.
-            val location = withTimeoutOrNull(25000L) { 
-                fusedLocationClient.getCurrentLocation(
-                    Priority.PRIORITY_HIGH_ACCURACY,
-                    cts.token
-                ).await()
+            val location = withTimeoutOrNull(25000L) {
+                fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token).await()
             }
 
             if (location != null) {
-                val age = System.currentTimeMillis() - location.time
-                if (age < 60000) { // Accept if fix is < 1 min old
-                    Log.i(TAG, "✓ Fresh Fix: ${location.latitude}, ${location.longitude} (Acc: ${location.accuracy}m)")
-                    saveToRoom(location.latitude, location.longitude)
-                } else {
-                    Log.w(TAG, "Skipped stale fix (Age: ${age/1000}s)")
-                }
+                Log.i(TAG, "Location Fix: ${location.latitude}, ${location.longitude}")
+                saveToRoom(location.latitude, location.longitude)
             } else {
-                Log.e(TAG, "Location fix failed: Hardware Timeout or GPS Off")
+                Log.e(TAG, "Location Fix Timeout")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Fetch Error: ${e.message}")
         } finally {
             if (wakeLock?.isHeld == true) wakeLock?.release()
         }
+    }
+
+    private fun scheduleNextAlarm(delayMs: Long) {
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        
+        // Target ScheduleReceiver for better wake reliability
+        val intent = Intent(this, ScheduleReceiver::class.java).apply {
+            action = ScheduleReceiver.ACTION_LOCATION_ALARM
+        }
+        
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, 1001, intent, 
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val triggerAt = System.currentTimeMillis() + delayMs
+        
+        // Use setExactAndAllowWhileIdle for Doze mode penetration
+        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pendingIntent)
     }
 
     private suspend fun saveToRoom(lat: Double, lon: Double) {
@@ -161,59 +197,48 @@ class LocationService : Service() {
         val battery = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
 
-        repository.saveLocation(
-            LocationEntity(
-                latitude = lat,
-                longitude = lon,
-                batteryLevel = battery,
-                recordedAt = timestamp
-            )
-        )
-        Log.d(TAG, "Location committed to Room. Triggering sync.")
+        repository.saveLocation(LocationEntity(latitude = lat, longitude = lon, batteryLevel = battery, recordedAt = timestamp))
         syncManager.triggerPendingSync()
     }
 
-    private fun stopTracking() {
-        Log.i(TAG, "Stop Tracking Signal Received")
+    private fun stopTracking(startId: Int? = null) {
         trackingJob?.cancel()
         if (wakeLock?.isHeld == true) wakeLock?.release()
         stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        if (startId != null) {
+            stopSelf(startId)
+        } else {
+            stopSelf()
+        }
     }
 
-    private fun createNotification(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Call-Map")
-            .setContentText("Reliable tracking active")
-            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setOngoing(true)
-            .setCategory(Notification.CATEGORY_SERVICE)
-            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .build()
-    }
+    private fun createNotification(): Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        .setContentTitle("Call-Map Tracking")
+        .setContentText("Agent tracking is active")
+        .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+        .setOngoing(true)
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        .setCategory(Notification.CATEGORY_SERVICE)
+        .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+        .build()
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID, "Location Tracking", NotificationManager.IMPORTANCE_LOW
-            )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            val channel = NotificationChannel(CHANNEL_ID, "Agent Tracking Service", NotificationManager.IMPORTANCE_LOW).apply {
+                description = "Continuous background location tracking"
+                enableVibration(false)
+                setSound(null, null)
+                setShowBadge(false)
+            }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
     override fun onBind(intent: Intent?) = null
-
-    override fun onDestroy() {
-        stopTracking()
-        serviceScope.cancel()
-        super.onDestroy()
-    }
+    override fun onDestroy() { stopTracking(); serviceScope.cancel(); super.onDestroy() }
 }
 
-/**
- * GMS Task to Coroutine Bridge
- */
 suspend fun <T> com.google.android.gms.tasks.Task<T>.await(): T? = suspendCancellableCoroutine { cont ->
     addOnSuccessListener { cont.resume(it) }
     addOnFailureListener { cont.resume(null) }

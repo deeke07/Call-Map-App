@@ -31,7 +31,7 @@ class CallReceiver : BroadcastReceiver() {
         private var lastCallState: Int = TelephonyManager.CALL_STATE_IDLE
         // Track call IDs we've already sent to service to prevent duplicates
         private val processedCallIds = Collections.synchronizedSet(mutableSetOf<String>())
-        
+
         // Metadata for the next outgoing call triggered via FCM
         private var pendingDialMetaData: Pair<String, String>? = null
 
@@ -162,7 +162,7 @@ class CallReceiver : BroadcastReceiver() {
                     if (current.answeredTime > 0) current.wasAnswered = true
                     stopRecording(context, current)
                 }
-                
+
                 // 2. Process all INTERRUPTED calls
                 synchronized(interruptedCalls) {
                     val iterator = interruptedCalls.iterator()
@@ -205,7 +205,7 @@ class CallReceiver : BroadcastReceiver() {
             return
         }
         processedCallIds.add(callId)
-        
+
         // Cleanup old IDs
         if (processedCallIds.size > 100) {
             val toRemove = processedCallIds.take(50).toSet()
@@ -223,7 +223,7 @@ class CallReceiver : BroadcastReceiver() {
             putExtra(CallRecorderService.EXTRA_INTERRUPTED_NUMBERS, callData.interruptedBy.joinToString(","))
             putExtra(CallRecorderService.EXTRA_META_DATA, callData.metaData)
         }
-        
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent)
         } else {

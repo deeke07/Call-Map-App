@@ -13,7 +13,7 @@ object FileUtils {
     private const val TAG = "FileUtils"
 
     fun getPublicRecordingFolder(context: Context): File {
-        val docFolder = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "CallRecords")
+        val docFolder = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "CallRecords")
         if (!docFolder.exists()) {
             docFolder.mkdirs()
         }
@@ -115,7 +115,7 @@ object FileUtils {
         val timeDiff: Long
     )
 
-    fun findBestSystemRecording(
+    suspend fun findBestSystemRecording(
         logEndTime: Long,
         systemDurationSec: Long,
         clientNumber: String,
@@ -194,14 +194,14 @@ object FileUtils {
         return diff <= tolerance
     }
 
-    fun isFileStable(file: File): Boolean {
+    suspend fun isFileStable(file: File): Boolean {
         if (!file.exists() || file.length() == 0L) return false
 
         // Check file size stability over multiple reads
         val sizes = mutableListOf<Long>()
         repeat(3) {
             sizes.add(file.length())
-            Thread.sleep(1000) // 1 second delay
+            kotlinx.coroutines.delay(1000) // Non-blocking delay
         }
 
         // All sizes must be equal and > 0

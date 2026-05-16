@@ -78,11 +78,10 @@ class DeviceEventRepositoryImpl @Inject constructor(
 
         return try {
             syncMutex.withLock {
-                var hasMore = true
-                while (hasMore) {
+                var someFailed = false
+                while (true) {
                     val pendingEvents = dao.getUnsyncedEvents(SyncStatus.PENDING, BATCH_SIZE)
                     if (pendingEvents.isEmpty()) {
-                        hasMore = false
                         break
                     }
 
@@ -92,6 +91,7 @@ class DeviceEventRepositoryImpl @Inject constructor(
                             UploadResult.SUCCESS -> dao.deleteEventById(event.id)
                             UploadResult.PERMANENT_FAILURE -> dao.updateSyncStatus(event.id, SyncStatus.FAILED)
                             UploadResult.RETRYABLE_FAILURE -> {
+                                someFailed = true
                                 val newRetryCount = event.retryCount + 1
                                 if (newRetryCount >= MAX_RETRY_COUNT) {
                                     dao.updateSyncStatus(event.id, SyncStatus.FAILED)
@@ -101,10 +101,13 @@ class DeviceEventRepositoryImpl @Inject constructor(
                             }
                         }
                     }
-                    if (pendingEvents.size < BATCH_SIZE) hasMore = false
+                }
+                if (someFailed) {
+                    Result.failure<Unit>(Exception("Some events failed to sync"))
+                } else {
+                    Result.success(Unit)
                 }
             }
-            Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Error syncing events", e)
             Result.failure(e)
@@ -160,7 +163,7 @@ class DeviceEventRepositoryImpl @Inject constructor(
 
         WorkManager.getInstance(context).enqueueUniqueWork(
             "DeviceEventSync_Immediate",
-            ExistingWorkPolicy.REPLACE,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
             workRequest
         )
     }

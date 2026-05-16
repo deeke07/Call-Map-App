@@ -29,7 +29,7 @@ class CallRepositoryImpl @Inject constructor(
     companion object {
         private const val TAG = "CallRepository"
         private const val MAX_RETRY_COUNT = 3
-        private const val BATCH_SIZE = 5
+        private const val BATCH_SIZE = 100
     }
 
     override suspend fun saveCallLog(callLog: CallLogEntity): Long {
@@ -58,8 +58,10 @@ class CallRepositoryImpl @Inject constructor(
             val callAnsweredAt = apiModel.call_answered_at?.toRequestBody("text/plain".toMediaTypeOrNull())
             val callerName = (callLog.callerName ?: "Unknown").toRequestBody("text/plain".toMediaTypeOrNull())
             val durationMismatch = (if (callLog.durationMismatch) "1" else "0").toRequestBody("text/plain".toMediaTypeOrNull())
-            val wasOnHold = (if (callLog.wasOnHold) "1" else "0").toRequestBody("text/plain".toMediaTypeOrNull())
-            val interruptedNumbers = callLog.interruptedNumbers?.toRequestBody("text/plain".toMediaTypeOrNull())
+            val wasOnHold = apiModel.was_on_hold.toRequestBody("text/plain".toMediaTypeOrNull())
+            val interruptedNumbers = apiModel.interrupted_numbers?.let { 
+                if (it.isEmpty()) null else it.toRequestBody("text/plain".toMediaTypeOrNull())
+            }
             val spotSettingVersion = callLog.spotSettingVersion?.toRequestBody("text/plain".toMediaTypeOrNull())
             val apkVersion = callLog.apkVersion?.toRequestBody("text/plain".toMediaTypeOrNull())
             val latitude = callLog.latitude?.toRequestBody("text/plain".toMediaTypeOrNull())
@@ -70,8 +72,15 @@ class CallRepositoryImpl @Inject constructor(
             // Only create recording part if the mapper decided to include it
             val recordingPart = apiModel.call_recording_file?.let { path ->
                 val file = File(path)
-                if (file.exists()) {
-                    val requestFile = file.asRequestBody("audio/x-wav".toMediaTypeOrNull())
+                if (file.exists() && file.length() > 0) {
+                    val mimeType = when (file.extension.lowercase()) {
+                        "m4a" -> "audio/mp4"
+                        "amr" -> "audio/amr"
+                        "3gp" -> "audio/3gpp"
+                        "aac" -> "audio/aac"
+                        else -> "audio/x-wav"
+                    }
+                    val requestFile = file.asRequestBody(mimeType.toMediaTypeOrNull())
                     MultipartBody.Part.createFormData("call_recording_file", file.name, requestFile)
                 } else null
             }
@@ -89,7 +98,7 @@ class CallRepositoryImpl @Inject constructor(
             } else {
                 val errorBody = response.errorBody()?.string()
                 Log.e(TAG, "Upload failed for ${callLog.uniqueId}: Code ${response.code()} - $errorBody")
-                
+
                 val newRetryCount = callLog.retryCount + 1
                 if (newRetryCount >= MAX_RETRY_COUNT) {
                     dao.updateSyncStatus(callLog.uniqueId, SyncStatus.FAILED)
@@ -142,57 +151,47 @@ class CallRepositoryImpl @Inject constructor(
     }
 
     override suspend fun uploadPendingCallLogs(context: android.content.Context): Result<Unit> {
-        if (!networkObserver.isConnected()) return Result.success(Unit)
+        if (!networkObserver.isConnected()) {
+            return Result.failure(Exception("No internet connection"))
+        }
 
         return try {
             syncMutex.withLock {
                 var totalSuccess = 0
-                var totalFailure = 0
-                var hasMore = true
+                val attemptedIds = mutableSetOf<String>()
 
-                while (hasMore) {
-                    val pendingLogs = dao.getUnsyncedCallLogsBatch(SyncStatus.PENDING, BATCH_SIZE)
-                    if (pendingLogs.isEmpty()) {
-                        hasMore = false
-                        break
-                    }
-
-                    Log.d(TAG, "Processing batch of ${pendingLogs.size} calls...")
+                while (true) {
+                    val pendingLogs = dao.getPendingCallLogsBatch(BATCH_SIZE)
+                        .filter { it.uniqueId !in attemptedIds }
                     
+                    if (pendingLogs.isEmpty()) break
+
+                    Log.d(TAG, "Processing sync batch of ${pendingLogs.size} calls...")
+
                     for (log in pendingLogs) {
-                        val audioFile = log.recordingFilePath?.let { File(it) }
-                        val result = uploadCallLog(log, audioFile)
+                        attemptedIds.add(log.uniqueId)
+                        val result = uploadCallLog(log, log.recordingFilePath?.let { File(it) })
 
                         if (result.isSuccess) {
                             totalSuccess++
-                            // Delete internal recordings after successful upload
+                            // Cleanup internal files
                             log.recordingFilePath?.let { path ->
                                 if (FileUtils.isAppRecording(context, path)) {
-                                    val file = File(path)
-                                    if (file.exists()) {
-                                        file.delete()
-                                        Log.i(TAG, "Cleanup: Deleted uploaded file for ${log.clientNumber}")
-                                    }
+                                    File(path).let { if (it.exists()) it.delete() }
                                 }
                             }
-                        } else {
-                            totalFailure++
-                            // If a single upload fails, we mark it as failed or update retry count inside uploadCallLog
-                            // We continue to next one in batch, but if it's a persistent network error, 
-                            // maybe we should stop? For now, we continue the batch.
                         }
                     }
                     
-                    // If the batch we just got was smaller than BATCH_SIZE, we've reached the end
-                    if (pendingLogs.size < BATCH_SIZE) {
-                        hasMore = false
-                    }
+                    // Safety break if we've reached a huge number or everything is failing
+                    if (attemptedIds.size > 500) break
                 }
-
-                Log.d(TAG, "Sync process finished. Total: $totalSuccess success, $totalFailure failure")
+                
+                Log.d(TAG, "Sync process finished. Total success: $totalSuccess")
             }
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e(TAG, "Error in batch upload", e)
             Result.failure(e)
         }

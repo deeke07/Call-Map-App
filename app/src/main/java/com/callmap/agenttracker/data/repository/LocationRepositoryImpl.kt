@@ -44,44 +44,56 @@ class LocationRepositoryImpl @Inject constructor(
     }
 
     override suspend fun syncPendingLocations(): Resource<Int> {
-        Log.i(TAG, ">>> Sync Session TRIGGERED <<<")
+        val unsyncedCount = dao.getUnsyncedCount()
+        Log.i(TAG, "Sync Session Triggered (Pending: $unsyncedCount)")
         
-        // Warm-up: Sometimes the network interface is up but not yet routing data
         var isReady = networkObserver.isConnected()
         if (!isReady) {
-            Log.d(TAG, "Network not ready yet, waiting 2.5s...")
-            delay(2500)
+            Log.d(TAG, "Network not ready yet, waiting 3s...")
+            delay(3000)
             isReady = networkObserver.isConnected()
         }
 
         if (!isReady) {
-            Log.w(TAG, "Sync aborted: Network reports DISCONNECTED after warm-up.")
+            Log.w(TAG, "Sync aborted: Network reports DISCONNECTED.")
             return Resource.Error("No internet connection")
         }
 
         return try {
             syncMutex.withLock {
                 var totalSynced = 0
+                var consecutiveFailures = 0
                 
                 while (true) {
                     val pending = dao.getUnsyncedLocations(limit = BATCH_SIZE)
                     if (pending.isEmpty()) {
-                        Log.d(TAG, "Sync loop finished: No more pending locations.")
+                        Log.d(TAG, "Sync loop finished: All pending locations processed.")
                         break
                     }
 
-                    Log.i(TAG, "Processing batch of ${pending.size} locations...")
+                    Log.d(TAG, "Processing batch of ${pending.size} (Synced: $totalSynced)")
                     val result = syncBatchInternal(pending)
+                    
                     if (result is Resource.Success) {
                         totalSynced += (result.data ?: 0)
+                        consecutiveFailures = 0 // Reset on success
+                        Log.d(TAG, "Batch synced: ${result.data} items.")
                     } else {
+                        // Handle DNS/Transient errors with a short retry
+                        if (consecutiveFailures < 2 && (result.message?.contains("Unable to resolve host") == true)) {
+                            consecutiveFailures++
+                            Log.w(TAG, "DNS/Host not ready. Retrying batch in 5s... (Attempt $consecutiveFailures)")
+                            delay(5000)
+                            continue 
+                        }
+                        
                         Log.e(TAG, "Batch failed: ${result.message}. Session halted.")
                         return if (totalSynced > 0) Resource.Success(totalSynced) else result
                     }
                 }
                 
                 if (totalSynced > 0) {
-                    Log.i(TAG, "✓ SUCCESS: Synced total of $totalSynced locations.")
+                    Log.i(TAG, "Sync Complete: Total $totalSynced locations.")
                 }
                 Resource.Success(totalSynced)
             }
@@ -89,7 +101,7 @@ class LocationRepositoryImpl @Inject constructor(
             Log.e(TAG, "Sync Session FATAL: ${e.message}")
             Resource.Error(e.message ?: "Sync failed")
         } finally {
-            Log.i(TAG, "<<< Sync Session ENDED >>>")
+            Log.d(TAG, "Sync Session Ended")
         }
     }
 

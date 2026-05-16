@@ -58,16 +58,15 @@ class AgentTrackerApp : Application(), Configuration.Provider, ImageLoaderFactor
         connectivityManager.registerNetworkCallback(networkRequest, object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 appScope.launch {
-                    Log.d("AgentTrackerApp", "Network restored. Tracking Online event.")
+                    Log.d("AgentTrackerApp", "Network restored. Triggering sync.")
                     stateManager.trackBinaryState(
                         stateKey = "network_status",
                         isEnabled = true,
                         enabledEvent = EventManager.DEVICE_ONLINE,
                         disabledEvent = EventManager.DEVICE_OFFLINE
                     )
-                    // No manual sync call needed here. 
-                    // WorkManager will automatically resume any pending sync tasks 
-                    // that were waiting for a network connection.
+                    // Explicitly trigger sync when internet returns for faster recovery
+                    appInitializer.init()
                 }
             }
 

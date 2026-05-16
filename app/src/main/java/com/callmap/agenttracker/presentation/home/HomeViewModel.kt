@@ -47,38 +47,11 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             sessionManager.getRegistration().collect { registration ->
                 _state.update { it.copy(registration = registration) }
-                if (registration != null) {
-                    handleServiceLifecycle(registration.trackingEnabled)
-                } else {
-                    Log.w("HomeViewModel", "Registration is null, not starting service")
-                }
             }
         }
     }
 
-    private fun handleServiceLifecycle(isEnabled: Boolean) {
-        Log.d("HomeViewModel", "handleServiceLifecycle: isEnabled=$isEnabled")
-        val intent = Intent(context, LocationService::class.java).apply {
-            action = if (isEnabled) LocationService.ACTION_START else LocationService.ACTION_STOP
-        }
 
-        try {
-            if (isEnabled) {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    Log.d("HomeViewModel", "Starting foreground service via context.startForegroundService")
-                    context.startForegroundService(intent)
-                } else {
-                    Log.d("HomeViewModel", "Starting service via context.startService")
-                    context.startService(intent)
-                }
-            } else {
-                Log.d("HomeViewModel", "Stopping service")
-                context.stopService(intent)
-            }
-        } catch (e: Exception) {
-            Log.e("HomeViewModel", "Error in handleServiceLifecycle", e)
-        }
-    }
 
     private fun setupBackgroundSync() {
         val constraints = Constraints.Builder()

@@ -16,10 +16,12 @@ import android.provider.CallLog
 import android.provider.ContactsContract
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
 import com.callmap.agenttracker.data.local.entity.CallLogEntity
 import com.callmap.agenttracker.data.local.entity.SyncStatus
@@ -59,7 +61,7 @@ class CallRecorderService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var fusedLocationClient: com.google.android.gms.location.FusedLocationProviderClient
-    
+
     // State for the single active internal recording
     private var audioRecord: AudioRecord? = null
     private var noiseSuppressor: NoiseSuppressor? = null
@@ -67,10 +69,10 @@ class CallRecorderService : Service() {
     @Volatile private var recordingFile: File? = null
     @Volatile private var recordingJob: Job? = null
     @Volatile private var activeRecordingCallId: String? = null
-    
+
     // For handling preemption and thread-safe state
     private val recordingMutex = Mutex()
-    
+
     // Track active processing tasks to know when to stopSelf()
     private val activeTasks = AtomicInteger(0)
 
@@ -84,7 +86,7 @@ class CallRecorderService : Service() {
 
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
-        
+
         const val EXTRA_NUMBER = "EXTRA_NUMBER"
         const val EXTRA_TYPE = "EXTRA_TYPE"
         const val EXTRA_START_TIME = "EXTRA_START_TIME"
@@ -107,26 +109,33 @@ class CallRecorderService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val action = intent?.action
-        val number = intent?.getStringExtra(EXTRA_NUMBER) ?: "Unknown"
-        val type = intent?.getIntExtra(EXTRA_TYPE, CallLog.Calls.OUTGOING_TYPE) ?: CallLog.Calls.OUTGOING_TYPE
-        val startTime = intent?.getLongExtra(EXTRA_START_TIME, System.currentTimeMillis()) ?: System.currentTimeMillis()
-        val answeredTime = intent?.getLongExtra(EXTRA_ANSWERED_TIME, 0L) ?: 0L
-        val metaData = intent?.getStringExtra(EXTRA_META_DATA)
+        if (intent == null) {
+            Log.d(TAG, "Service restarted with null intent. Checking if we should stop.")
+            decrementAndCheckStop(startId)
+            return START_STICKY
+        }
+
+        val action = intent.action
+        val number = intent.getStringExtra(EXTRA_NUMBER) ?: "Unknown"
+        val type = intent.getIntExtra(EXTRA_TYPE, CallLog.Calls.OUTGOING_TYPE)
+        val startTime = intent.getLongExtra(EXTRA_START_TIME, System.currentTimeMillis())
+        val answeredTime = intent.getLongExtra(EXTRA_ANSWERED_TIME, 0L)
+        val metaData = intent.getStringExtra(EXTRA_META_DATA)
         val callId = "$number|$startTime|$type"
 
         Log.d(TAG, "onStartCommand: action=$action, callId=$callId")
 
-        // Ensure service is foregrounded immediately to satisfy Android 12+ requirements
+        // Ensure service is foregrounded immediately
         startForeground(54321, createNotification("Processing call with $number"))
 
         when (action) {
             ACTION_START -> {
-                val recordingEnabled = intent.getBooleanExtra(EXTRA_RECORDING_ENABLED, false)
                 activeTasks.incrementAndGet()
-                
                 serviceScope.launch {
                     try {
+                        val registration = sessionManager.getRegistration().first()
+                        val recordingEnabled = registration?.recordingEnabled ?: true
+                        
                         recordingMutex.withLock {
                             if (activeRecordingCallId != null && activeRecordingCallId != callId) {
                                 Log.i(TAG, "Preempting recording for $activeRecordingCallId to start $callId")
@@ -136,12 +145,12 @@ class CallRecorderService : Service() {
                             if (activeRecordingCallId == null && recordingEnabled) {
                                 activeRecordingCallId = callId
                                 startRecordingInternal(number)
-                            } else if (!recordingEnabled) {
-                                Log.d(TAG, "Recording disabled for $callId")
+                            } else {
+                                Log.d(TAG, "Recording not started for $callId (Enabled: $recordingEnabled)")
                             }
                         }
                     } finally {
-                        decrementAndCheckStop()
+                        decrementAndCheckStop(startId)
                     }
                 }
             }
@@ -151,19 +160,19 @@ class CallRecorderService : Service() {
                 val interrupted = intent.getStringExtra(EXTRA_INTERRUPTED_NUMBERS) ?: ""
 
                 activeTasks.incrementAndGet()
-                
+
                 serviceScope.launch {
                     try {
                         var fileToProcess: File? = null
                         var jobToJoin: Job? = null
-                        
+
                         recordingMutex.withLock {
                             if (callId == activeRecordingCallId) {
                                 Log.d(TAG, "Stopping active internal recording for $callId")
                                 isRecording = false
                                 jobToJoin = recordingJob
                                 fileToProcess = recordingFile
-                                
+
                                 activeRecordingCallId = null
                                 recordingFile = null
                                 recordingJob = null
@@ -176,7 +185,7 @@ class CallRecorderService : Service() {
                         }
 
                         jobToJoin?.join()
-                        
+
                         finalizeCallRecord(
                             number = number,
                             type = type,
@@ -187,39 +196,40 @@ class CallRecorderService : Service() {
                             wasOnHold = wasOnHold,
                             interruptedNumbers = interrupted,
                             internalFile = fileToProcess,
-                            metaData = metaData
+                            metaData = metaData,
+                            startId = startId
                         )
                     } finally {
-                        decrementAndCheckStop()
+                        decrementAndCheckStop(startId)
                     }
                 }
             }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private suspend fun stopInternalRecordingLocked() {
         val oldId = activeRecordingCallId ?: return
         isRecording = false
         recordingJob?.join()
-        
+
         val file = recordingFile
         if (file != null && file.exists() && file.length() > 44) {
             pendingInternalFiles[oldId] = file
             Log.d(TAG, "Saved preempted recording for $oldId to pending map")
         }
-        
+
         activeRecordingCallId = null
         recordingFile = null
         recordingJob = null
     }
 
-    private fun decrementAndCheckStop() {
+    private fun decrementAndCheckStop(startId: Int) {
         val remaining = activeTasks.decrementAndGet()
         val activeId = activeRecordingCallId
         if (remaining == 0 && activeId == null) {
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            stopSelf(startId)
         }
     }
 
@@ -235,7 +245,7 @@ class CallRecorderService : Service() {
             try {
                 // Give the system a moment to release hardware from any previous call/preemption
                 delay(600)
-                
+
                 isRecording = true
 
                 val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
@@ -257,7 +267,7 @@ class CallRecorderService : Service() {
                     isRecording = false
                     return@launch
                 }
-                
+
                 audioRecord = localAudioRecord
 
                 if (NoiseSuppressor.isAvailable()) {
@@ -281,7 +291,7 @@ class CallRecorderService : Service() {
                 val fileName = "call_${System.currentTimeMillis()}.wav"
                 localFile = FileUtils.getRecordingFile(applicationContext, fileName)
                 recordingFile = localFile
-                
+
                 localFos = FileOutputStream(localFile)
                 localFos.write(ByteArray(44)) // Dummy header
 
@@ -329,7 +339,7 @@ class CallRecorderService : Service() {
 
                 noiseSuppressor?.release()
                 noiseSuppressor = null
-                
+
                 localAudioRecord?.apply {
                     try {
                         if (state == AudioRecord.STATE_INITIALIZED && recordingState == AudioRecord.RECORDSTATE_RECORDING) {
@@ -353,7 +363,8 @@ class CallRecorderService : Service() {
         wasOnHold: Boolean,
         interruptedNumbers: String,
         internalFile: File?,
-        metaData: String? = null
+        metaData: String? = null,
+        startId: Int
     ) {
         val callId = "$number|$startTime|$type"
         if (processingCallIds.contains(callId)) {
@@ -374,7 +385,7 @@ class CallRecorderService : Service() {
         val registration = sessionManager.getRegistration().first() ?: return
         val batteryLevel = getBatteryLevel()
         val apkVersion = getApkVersion()
-        
+
         // Only fetch location if trackingEnabled AND locationOnCall are both true
         val location = if (registration.locationOnCall) getCurrentLocation() else null
 
@@ -385,13 +396,13 @@ class CallRecorderService : Service() {
         val finalNumber = callLogDetails?.number ?: number
         val systemDuration = callLogDetails?.duration ?: 0L
         val logStartTime = callLogDetails?.timestamp ?: startTime
-        
+
         val internalFileValid = internalFile?.exists() == true && FileUtils.getAudioDuration(internalFile) > 0
         val internalFileDuration = if (internalFileValid) FileUtils.getAudioDuration(internalFile) else 0L
 
         // Source of truth for answered status and type
         val finalType = callLogDetails?.type ?: type
-        
+
         // Picked up means the receiver actually answered (talk time > 0)
         val wasActuallyPickedUp = if (systemDuration > 0) {
             true
@@ -407,52 +418,47 @@ class CallRecorderService : Service() {
         var finalRecordingPath: String? = null
         var isMismatch = false
 
-        if (registration.recordingEnabled) {
-            // 3. BEST-FIT LOGIC: Compare OEM and Internal
-            val bestOemFile = if (callLogDetails != null) {
-                FileUtils.findBestSystemRecording(logEndTime, systemDuration, finalNumber, finalCallerName)
-            } else null
+        // 3. BEST-FIT LOGIC: Compare OEM and Internal
+        val bestOemFile = if (callLogDetails != null) {
+            FileUtils.findBestSystemRecording(logEndTime, systemDuration, finalNumber, finalCallerName)
+        } else null
 
-            when {
-                bestOemFile != null && internalFileValid -> {
-                    val oemLength = FileUtils.getAudioDuration(bestOemFile)
-                    Log.d(TAG, "Comparing OEM ($oemLength s) and Internal ($internalFileDuration s)")
-                    if (systemDuration > (oemLength + 5) && internalFileDuration > oemLength) {
-                        finalRecordingPath = internalFile.absolutePath
-                        isMismatch = true
-                        Log.d(TAG, "Choosing Internal recording (better duration)")
-                    } else {
-                        finalRecordingPath = bestOemFile.absolutePath
-                        internalFile.delete()
-                        Log.d(TAG, "Choosing OEM recording")
-                    }
-                }
-                bestOemFile != null -> {
-                    finalRecordingPath = bestOemFile.absolutePath
-                    internalFile?.delete()
-                    Log.d(TAG, "Choosing OEM recording (Internal missing)")
-                }
-                internalFileValid -> {
+        when {
+            bestOemFile != null && internalFileValid -> {
+                val oemLength = FileUtils.getAudioDuration(bestOemFile)
+                Log.d(TAG, "Comparing OEM ($oemLength s) and Internal ($internalFileDuration s)")
+                if (systemDuration > (oemLength + 5) && internalFileDuration > oemLength) {
                     finalRecordingPath = internalFile.absolutePath
-                    // Only flag as mismatch if we picked up the call but are using internal recording
-                    isMismatch = wasActuallyPickedUp
-                    Log.d(TAG, "Choosing Internal recording (OEM missing)")
-                }
-                else -> {
-                    internalFile?.delete()
-                    Log.d(TAG, "No valid recording found for $callId")
+                    isMismatch = true
+                    Log.d(TAG, "Choosing Internal recording (better duration)")
+                } else {
+                    finalRecordingPath = bestOemFile.absolutePath
+                    internalFile.delete()
+                    Log.d(TAG, "Choosing OEM recording")
                 }
             }
-        } else {
-            Log.d(TAG, "Recording disabled globally, cleaning up for $callId")
-            internalFile?.delete()
+            bestOemFile != null -> {
+                finalRecordingPath = bestOemFile.absolutePath
+                internalFile?.delete()
+                Log.d(TAG, "Choosing OEM recording (Internal missing)")
+            }
+            internalFileValid -> {
+                finalRecordingPath = internalFile.absolutePath
+                // Only flag as mismatch if we picked up the call but are using internal recording
+                isMismatch = wasActuallyPickedUp
+                Log.d(TAG, "Choosing Internal recording (OEM missing)")
+            }
+            else -> {
+                internalFile?.delete()
+                Log.d(TAG, "No valid recording found for $callId")
+            }
         }
 
         // 4. Save to DB
         val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
         val startStr = sdf.format(Date(logStartTime))
         val endStr = sdf.format(Date(logEndTime))
-        
+
         // Use system-calculated answered time ONLY if the call was picked up
         val answeredAtStr = when {
             systemDuration > 0 -> sdf.format(Date(logEndTime - (systemDuration * 1000)))
@@ -460,21 +466,15 @@ class CallRecorderService : Service() {
             else -> null
         }
 
-        // Only proceed if recording is enabled
-        if (!registration.recordingEnabled) {
-            Log.d(TAG, "Recording disabled globally. Skipping save for $callId")
-            internalFile?.delete()
-            return
-        }
-
-        // We save the log even if unanswered (to capture attempt duration), 
-        // but we only keep the recording file if the call was actually picked up.
-        val finalFilePath = if (wasActuallyPickedUp) {
+        // We save the log regardless of recordingEnabled, but we only attach a file if enabled and picked up
+        val finalFilePath = if (registration.recordingEnabled && wasActuallyPickedUp) {
             finalRecordingPath
         } else {
             isMismatch = false // No mismatch if we are not sending a recording
-            Log.d(TAG, "Call not picked up (duration 0), removing recording file for $callId")
-            internalFile?.delete()
+            Log.d(TAG, "Not attaching recording (Enabled: ${registration.recordingEnabled}, PickedUp: $wasActuallyPickedUp)")
+            if (finalRecordingPath != null && FileUtils.isAppRecording(applicationContext, finalRecordingPath)) {
+                 File(finalRecordingPath).delete()
+            }
             null
         }
 
@@ -502,13 +502,19 @@ class CallRecorderService : Service() {
                 apkVersion = apkVersion,
                 spotSettingVersion = null,
                 metaData = metaData,
-                isSynced = false,
                 retryCount = 0
             )
             callRepository.saveCallLog(callLog)
             Log.i("CALL-MAP", "✅ Call Processed: $callLog")
 
-            // Use reliable WorkManager for syncing
+            // 1. Immediate attempt if online (Wait for it to keep service alive)
+            try {
+                callRepository.uploadPendingCallLogs(applicationContext)
+            } catch (e: Exception) {
+                Log.e(TAG, "Immediate upload attempt failed", e)
+            }
+
+            // 2. Reliable sync via WorkManager
             scheduleSync()
         } else {
             Log.w(TAG, "Duplicate call detected. Skipping save for $uniqueId")
@@ -516,11 +522,19 @@ class CallRecorderService : Service() {
     }
 
     private fun scheduleSync() {
+        Log.d(TAG, "Enqueuing immediate sync for call log...")
         val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
-        val syncRequest = OneTimeWorkRequestBuilder<CallSyncWorker>().setConstraints(constraints).build()
+        val syncRequest = OneTimeWorkRequestBuilder<CallSyncWorker>()
+            .setConstraints(constraints)
+            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+            
+        // Use KEEP to avoid interrupting an ongoing upload from a previous call (e.g. in conference)
+        // The existing worker will pick up all pending logs in its while-loop.
         WorkManager.getInstance(applicationContext).enqueueUniqueWork(
-            CallSyncWorker.WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
+            CallSyncWorker.IMMEDIATE_WORK_NAME,
+            ExistingWorkPolicy.KEEP,
             syncRequest
         )
     }
@@ -563,11 +577,11 @@ class CallRecorderService : Service() {
                         val name = cursor.getString(cursor.getColumnIndexOrThrow(CallLog.Calls.CACHED_NAME)) ?: getContactName(logNumber)
 
                         val isTypeMatch = if (targetType == CallLog.Calls.INCOMING_TYPE) {
-                            type == CallLog.Calls.INCOMING_TYPE || 
-                            type == CallLog.Calls.MISSED_TYPE ||
-                            type == CallLog.Calls.REJECTED_TYPE ||
-                            type == 5 || // REJECTED_TYPE
-                            type == 6    // BLOCKED_TYPE
+                            type == CallLog.Calls.INCOMING_TYPE ||
+                                    type == CallLog.Calls.MISSED_TYPE ||
+                                    type == CallLog.Calls.REJECTED_TYPE ||
+                                    type == 5 || // REJECTED_TYPE
+                                    type == 6    // BLOCKED_TYPE
                         } else {
                             type == targetType
                         }

@@ -10,9 +10,9 @@ data class CallLogEntity(
     val deviceUuid: String,
     val clientNumber: String,
     val callType: Int, // Use CallLog.Calls values (e.g., 1=INCOMING, 2=OUTGOING, 3=MISSED)
-    val callDuration: Long, 
-    val callStartedAt: String, 
-    val callEndedAt: String, 
+    val callDuration: Long,
+    val callStartedAt: String,
+    val callEndedAt: String,
     val recordingFilePath: String?,
     val syncStatus: SyncStatus = SyncStatus.PENDING,
     val createdAt: Long = System.currentTimeMillis(),
@@ -27,6 +27,5 @@ data class CallLogEntity(
     val longitude: String? = null,
     val batteryLevel: String? = null,
     val metaData: String? = null,
-    val retryCount: Int = 0,
-    val isSynced: Boolean = false
+    val retryCount: Int = 0
 )

@@ -22,6 +22,8 @@ class AuthRepositoryImpl @Inject constructor(
     override suspend fun registerDevice(request: DeviceRegistrationRequest): Resource<RegistrationResult> {
         return try {
             val response = api.registerDevice(request)
+
+            Log.e("Server response", "$response")
             if (response.isSuccessful) {
                 val body = response.body()
                 if (body?.success == true && body.data != null) {
