@@ -68,6 +68,11 @@
         </service>
 
         <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="location"
+            tools:node="merge" />
+
+        <service
             android:name=".service.LocationService"
             android:foregroundServiceType="location"
             android:exported="false" />
@@ -123,7 +128,7 @@
 
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
-            android:value="location_tracking_channel" />
+            android:value="fcm_default_v1" />
         <receiver
             android:name=".service.DeviceStateReceiver"
             android:enabled="true"

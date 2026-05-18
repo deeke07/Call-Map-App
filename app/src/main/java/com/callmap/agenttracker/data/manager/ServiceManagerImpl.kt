@@ -22,16 +22,62 @@ class ServiceManagerImpl @Inject constructor(
 ) : ServiceManager {
 
     companion object {
-        private const val CHANNEL_ID = "location_tracking_v4"
+        private const val CHANNEL_LOCATION = "location_tracking_v4"
+        private const val CHANNEL_FCM = "fcm_default_v1"
+        private const val CHANNEL_RECORDING = "call_recording_channel"
     }
 
     override fun startServices() {
         Log.d("ServiceManager", "Starting services")
+        setupNotificationChannels()
     }
 
     override fun stopServices() {
         Log.d("ServiceManager", "Stopping all services")
         context.stopService(Intent(context, LocationService::class.java))
+    }
+
+    override fun setupNotificationChannels() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            // 1. Location Channel (Low importance, silent)
+            val locationChannel = NotificationChannel(
+                CHANNEL_LOCATION, 
+                "Agent Tracking", 
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Continuous background location tracking"
+                enableVibration(false)
+                setSound(null, null)
+                setShowBadge(false)
+            }
+
+            // 2. FCM Channel (High importance, heads-up)
+            val fcmChannel = NotificationChannel(
+                CHANNEL_FCM, 
+                "General Notifications", 
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Notifications for settings updates and call requests"
+                enableVibration(true)
+                setShowBadge(true)
+            }
+
+            // 3. Recording Channel (Low importance)
+            val recordingChannel = NotificationChannel(
+                CHANNEL_RECORDING, 
+                "Call Recording", 
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Foreground notification for active call recording"
+                enableVibration(false)
+                setSound(null, null)
+            }
+
+            notificationManager.createNotificationChannels(listOf(locationChannel, fcmChannel, recordingChannel))
+            Log.d("ServiceManager", "Notification channels initialized: $CHANNEL_LOCATION, $CHANNEL_FCM, $CHANNEL_RECORDING")
+        }
     }
 
     override fun handleServiceLifecycle(trackingEnabled: Boolean) {
@@ -76,26 +122,12 @@ class ServiceManagerImpl @Inject constructor(
     }
 
     override fun createNotification(content: String): Notification {
-        createNotificationChannel()
-        return NotificationCompat.Builder(context, CHANNEL_ID)
+        return NotificationCompat.Builder(context, CHANNEL_LOCATION)
             .setContentTitle("Call-Map")
             .setContentText(content)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(Notification.CATEGORY_SERVICE)
             .build()
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID, "Location Tracking", NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                enableVibration(false)
-                setSound(null, null)
-            }
-            val manager = context.getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
-        }
     }
 }

@@ -1,12 +1,13 @@
 package com.callmap.agenttracker.service.fcm
 
-import android.util.Log
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.callmap.agenttracker.MainActivity
 import com.callmap.agenttracker.R
@@ -32,7 +33,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     lateinit var serviceController: ServiceController
 
     companion object {
-        private const val CHANNEL_ID = "location_tracking_channel"
+        private const val CHANNEL_ID = "fcm_default_v1"
         private const val NOTIFICATION_ID = 1001
     }
 
@@ -66,8 +67,6 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     private fun handleSettingsChange(title: String, body: String) {
-        // Use a different notification ID for settings changes so it doesn't overwrite
-        // the location tracking notification or the dial request notification
         val SETTINGS_NOTIFICATION_ID = 2002
         showNotification(title, body, null, SETTINGS_NOTIFICATION_ID)
         serviceScope.launch {
@@ -80,7 +79,6 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
     private fun makeCall(phoneNumber: String, metaData: String?) {
         try {
-            // Set metadata in CallReceiver to be picked up when call starts
             if (metaData != null) {
                 CallReceiver.setPendingDialMetaData(phoneNumber, metaData)
             }
@@ -96,6 +94,17 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     private fun showNotification(title: String, body: String, phoneNumber: String? = null, notificationId: Int = NOTIFICATION_ID) {
+        // Ensure channel exists in case of OS cleanup, though AppInitializer handles it
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (notificationManager.getNotificationChannel(CHANNEL_ID) == null) {
+                serviceController.syncServicesWithConfig() // This will trigger setupNotificationChannels
+                // Alternatively, just create it here as a fallback
+                val channel = NotificationChannel(CHANNEL_ID, "General Notifications", NotificationManager.IMPORTANCE_HIGH)
+                notificationManager.createNotificationChannel(channel)
+            }
+        }
+
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
         }
@@ -114,13 +123,11 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             .setContentIntent(pendingIntent)
             .build()
 
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.notify(notificationId, notification)
     }
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
         Log.d("FCM", "New token: $token")
-        // In a real app, send this token to the backend
     }
 }

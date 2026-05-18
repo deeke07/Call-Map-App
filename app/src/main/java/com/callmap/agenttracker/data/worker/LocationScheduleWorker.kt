@@ -1,6 +1,8 @@
 package com.callmap.agenttracker.data.worker
 
 import android.content.Context
+import android.content.pm.ServiceInfo
+import android.os.Build
 import android.util.Log
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
@@ -26,10 +28,12 @@ class LocationScheduleWorker @AssistedInject constructor(
     }
 
     override suspend fun getForegroundInfo(): ForegroundInfo {
-        return ForegroundInfo(
-            12346, 
-            serviceManager.createNotification("Syncing location schedule...")
-        )
+        val notification = serviceManager.createNotification("Syncing location schedule...")
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(12346, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        } else {
+            ForegroundInfo(12346, notification)
+        }
     }
 
     override suspend fun doWork(): Result {

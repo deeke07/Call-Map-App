@@ -32,6 +32,9 @@ class AppInitializerImpl @Inject constructor(
     override fun init() {
         Log.i("AppInitializer", "Initializing application background systems...")
         
+        // 0. Ensure Notification Channels exist
+        serviceManager.setupNotificationChannels()
+
         // 1. Setup periodic background sync & precise alarms
         syncManager.setupBackgroundSync()
 
