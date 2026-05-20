@@ -331,9 +331,9 @@ class CallRecorderService : Service() {
                 val enhancer = VoiceEnhancer(
                     sampleRate = SAMPLE_RATE,
                     targetRms = 0.82f,
-                    minGain = 1.35f,
+                    minGain = 1.25f,
                     maxGain = 1200.0f,
-                    extraQuietBoost = 2.2f
+                    extraQuietBoost = 2.0f
                 )
                 var zeroCounter = 0
 
