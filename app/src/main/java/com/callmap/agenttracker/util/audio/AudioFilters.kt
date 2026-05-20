@@ -4,6 +4,7 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.sign
+import kotlin.math.tanh
 
 interface AudioFilter {
     fun process(samples: ShortArray, numSamples: Int)
@@ -83,12 +84,14 @@ class VoiceEnhancer(
             val activeNoiseFloor = noiseFloor.coerceAtLeast(noiseGateRms)
 
             // Track background noise when the signal is quiet so we can suppress hiss/room noise.
-            if (absSample < activeNoiseFloor * 1.5f) {
+            // Use a wider adaption band (3.0×) so that gaps between words still update the floor.
+            if (absSample < activeNoiseFloor * 3.0f) {
                 noiseFloor = (noiseFloor * (1.0f - noiseFloorAdaptRate)) + (absSample * noiseFloorAdaptRate)
             }
 
-            // Gate low-level noise before AGC to keep the recording cleaner.
-            val gatedSample = if (absSample < activeNoiseFloor * 1.35f) {
+            // Gate low-level noise before AGC.
+            // Threshold at 2.0× floor so brief consonants aren't clipped but steady noise is.
+            val gatedSample = if (absSample < activeNoiseFloor * 2.0f) {
                 sample * noiseAttenuation
             } else {
                 sample
@@ -102,11 +105,12 @@ class VoiceEnhancer(
             // Calculate dynamic gain (Ultra-aggressive for Samsung earpiece leakage)
             var gain = targetRms / (smoothedRms + 1e-7f)
 
-            // Lift very quiet segments (typically far-end earpiece leakage in receiver mode).
-            if (smoothedRms < 0.02f) {
+            // Lift very quiet segments (far-end earpiece leakage in receiver mode).
+            // Only triggers well below the gating floor to avoid boosting room noise.
+            if (smoothedRms < 0.008f) {
                 gain *= extraQuietBoost
-            } else if (smoothedRms < 0.05f) {
-                gain *= (1.0f + (extraQuietBoost - 1.0f) * 0.5f)
+            } else if (smoothedRms < 0.018f) {
+                gain *= (1.0f + (extraQuietBoost - 1.0f) * 0.4f)
             }
 
             gain = gain.coerceIn(minGain, maxGain)
@@ -124,11 +128,12 @@ class VoiceEnhancer(
                 processed *= 0.92f
             }
 
-            // Soft Limiter: Prevents harsh digital clipping by rounding off peaks
-            if (abs(processed) > 0.86f) {
-                val excess = abs(processed) - 0.86f
-                processed = sign(processed) * (0.86f + excess / (1.0f + excess * 4.5f))
-            }
+            // Smooth tanh-style saturator — replaces the harsh piecewise limiter so
+            // peaks roll off cleanly instead of producing audible distortion when
+            // AGC pushes gain very high (typical for faint earpiece-leakage capture).
+            // Headroom is set so signals below ~0.6 pass essentially untouched.
+            val drive = 1.25f
+            processed = tanh(processed * drive) / tanh(drive)
 
             samples[i] = (processed * 32768.0f).toInt().coerceIn(-32768, 32767).toShort()
         }

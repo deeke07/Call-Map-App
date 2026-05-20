@@ -296,20 +296,34 @@ class CallRecorderService : Service() {
                 originalMode = audioManager.mode
                 originalSpeakerOn = audioManager.isSpeakerphoneOn
 
-                // Do NOT touch audio mode here — the dialer owns the call session.
-                // Forcing MODE_IN_COMMUNICATION on Samsung can mute the call entirely.
+                // ── PRE-PROBE: switch to communication mode, enable speakerphone,
+                //               max voice-call volume ────────────────────────────────
+                // On Samsung A56 (and most non-Pixel devices), the only way a 3rd-party
+                // app can hear the remote caller is via the loudspeaker -> microphone
+                // acoustic path. The speakerphone toggle is IGNORED by Samsung when the
+                // global audio mode is MODE_IN_CALL (dialer-owned). We must briefly set
+                // MODE_IN_COMMUNICATION so the toggle is honored, then force speaker on,
+                // then crank STREAM_VOICE_CALL to maximum so the loudspeaker plays the
+                // remote voice as loud as possible for the microphone to pick up.
+                try {
+                    if (audioManager.mode != AudioManager.MODE_IN_COMMUNICATION) {
+                        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                        Log.i(TAG, "AudioManager mode forced to MODE_IN_COMMUNICATION (was $originalMode) for speaker routing")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not set MODE_IN_COMMUNICATION: ${e.message}")
+                }
 
-                // ── PRE-PROBE: enable speakerphone + max voice-call volume ─────────────────
-                // On Samsung A56 (and most non-Pixel devices), the only way a 3rd-party app
-                // can hear the remote caller is via the loudspeaker -> microphone acoustic
-                // path. We enable speakerphone BEFORE probing so every mic-source probe
-                // already hears both voices, and we crank STREAM_VOICE_CALL to maximum so
-                // the loudspeaker plays the remote voice as loud as possible.
                 if (!audioManager.isSpeakerphoneOn) {
                     try {
                         audioManager.isSpeakerphoneOn = true
-                        speakerForcedOn = true
-                        Log.i(TAG, "Speakerphone forced ON for acoustic two-way capture")
+                        // Retry once after a short settle if the OS didn't honor it
+                        if (!audioManager.isSpeakerphoneOn) {
+                            delay(150)
+                            audioManager.isSpeakerphoneOn = true
+                        }
+                        speakerForcedOn = audioManager.isSpeakerphoneOn
+                        Log.i(TAG, "Speakerphone forced ON for acoustic two-way capture (state=${audioManager.isSpeakerphoneOn})")
                     } catch (e: Exception) {
                         Log.w(TAG, "Could not enable speakerphone: ${e.message}")
                     }
@@ -361,13 +375,13 @@ class CallRecorderService : Service() {
                 val audioBuffer = ShortArray(bufferSize)
                 val enhancer = VoiceEnhancer(
                     sampleRate = SAMPLE_RATE,
-                    targetRms = 0.78f,
-                    minGain = 1.18f,
-                    maxGain = 900.0f,
-                    extraQuietBoost = 1.6f,
-                    noiseGateRms = 0.016f,
-                    noiseAttenuation = 0.22f,
-                    noiseFloorAdaptRate = 0.0022f
+                    targetRms = 0.58f,
+                    minGain = 1.2f,
+                    maxGain = 650.0f,
+                    extraQuietBoost = 1.5f,
+                    noiseGateRms = 0.045f,
+                    noiseAttenuation = 0.05f,
+                    noiseFloorAdaptRate = 0.004f
                 )
                 var zeroCounter = 0
 
