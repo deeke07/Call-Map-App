@@ -278,6 +278,10 @@ class CallRecorderService : Service() {
             var localFile: File? = null
             var localTotalLen = 0L
             var originalMode = AudioManager.MODE_NORMAL
+            var originalSpeakerOn = false
+            var speakerForcedOn = false
+            var originalVoiceCallVolume = -1
+            var voiceCallVolumeBoosted = false
             var chosenSource = -1
             var totalReadBuffers = 0L
             var zeroReadBuffers = 0L
@@ -290,17 +294,44 @@ class CallRecorderService : Service() {
             try {
                 val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 originalMode = audioManager.mode
-                
-                // Attempting to set mode to MODE_IN_COMMUNICATION to prioritize audio capture
+                originalSpeakerOn = audioManager.isSpeakerphoneOn
+
+                // Do NOT touch audio mode here — the dialer owns the call session.
+                // Forcing MODE_IN_COMMUNICATION on Samsung can mute the call entirely.
+
+                // ── PRE-PROBE: enable speakerphone + max voice-call volume ─────────────────
+                // On Samsung A56 (and most non-Pixel devices), the only way a 3rd-party app
+                // can hear the remote caller is via the loudspeaker -> microphone acoustic
+                // path. We enable speakerphone BEFORE probing so every mic-source probe
+                // already hears both voices, and we crank STREAM_VOICE_CALL to maximum so
+                // the loudspeaker plays the remote voice as loud as possible.
+                if (!audioManager.isSpeakerphoneOn) {
+                    try {
+                        audioManager.isSpeakerphoneOn = true
+                        speakerForcedOn = true
+                        Log.i(TAG, "Speakerphone forced ON for acoustic two-way capture")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not enable speakerphone: ${e.message}")
+                    }
+                }
                 try {
-                    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-                    Log.d(TAG, "AudioManager mode set to MODE_IN_COMMUNICATION")
+                    val maxVc = audioManager.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)
+                    originalVoiceCallVolume = audioManager.getStreamVolume(AudioManager.STREAM_VOICE_CALL)
+                    if (originalVoiceCallVolume < maxVc) {
+                        audioManager.setStreamVolume(
+                            AudioManager.STREAM_VOICE_CALL,
+                            maxVc,
+                            0
+                        )
+                        voiceCallVolumeBoosted = true
+                        Log.i(TAG, "Voice-call stream volume boosted: $originalVoiceCallVolume -> $maxVc")
+                    }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Could not set AudioManager mode: ${e.message}")
+                    Log.w(TAG, "Could not boost voice-call volume: ${e.message}")
                 }
 
-                // Give the system more time to release hardware from the dialer's initial lock
-                delay(1200)
+                // Give the audio hardware time to switch route to loudspeaker and stabilise
+                delay(1500)
 
                 isRecording = true
 
@@ -531,6 +562,32 @@ class CallRecorderService : Service() {
                     Log.d(TAG, "AudioManager mode restored to $originalMode")
                 } catch (e: Exception) { }
 
+                // Restore speakerphone state if we forced it on
+                if (speakerForcedOn) {
+                    try {
+                        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                        am.isSpeakerphoneOn = originalSpeakerOn
+                        Log.d(TAG, "Speakerphone restored to $originalSpeakerOn")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not restore speakerphone state: ${e.message}")
+                    }
+                }
+
+                // Restore voice-call volume if we boosted it
+                if (voiceCallVolumeBoosted && originalVoiceCallVolume >= 0) {
+                    try {
+                        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                        am.setStreamVolume(
+                            AudioManager.STREAM_VOICE_CALL,
+                            originalVoiceCallVolume,
+                            0
+                        )
+                        Log.d(TAG, "Voice-call stream volume restored to $originalVoiceCallVolume")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Could not restore voice-call volume: ${e.message}")
+                    }
+                }
+
                 try {
                     localFos?.close()
                     if (localTotalLen > 0 && localFile != null) {
@@ -601,24 +658,19 @@ class CallRecorderService : Service() {
             return
         }
         processingCallIds.add(callId)
-        // Cleanup old IDs
         if (processingCallIds.size > 100) {
             val toRemove = processingCallIds.take(50)
             processingCallIds.removeAll(toRemove.toSet())
         }
 
-        // 1. Initial delay to allow System CallLog to be written
-        // Reduced delay for faster processing, but kept enough for the OS to commit the log
         delay(800)
 
         val registration = sessionManager.getRegistration().first() ?: return
         val batteryLevel = getBatteryLevel()
         val apkVersion = getApkVersion()
 
-        // Only fetch location if trackingEnabled AND locationOnCall are both true
         val location = if (registration.locationOnCall) getCurrentLocation() else null
 
-        // 2. Fetch CallLog (Retry up to 20s)
         val callLogDetails = getSystemCallLogDetails(number, startTime, type)
 
         val finalCallerName = callLogDetails?.name
@@ -629,14 +681,11 @@ class CallRecorderService : Service() {
         val internalFileValid = internalFile?.exists() == true && FileUtils.getAudioDuration(internalFile) > 0
         val internalFileDuration = if (internalFileValid) FileUtils.getAudioDuration(internalFile) else 0L
 
-        // Source of truth for answered status and type
         val finalType = callLogDetails?.type ?: type
 
-        // Picked up means the receiver actually answered (talk time > 0)
         val wasActuallyPickedUp = if (systemDuration > 0) {
             true
         } else if (callLogDetails == null) {
-            // Fallback for incoming calls if system log failed to fetch
             wasAnswered && finalType == CallLog.Calls.INCOMING_TYPE
         } else {
             false
@@ -647,7 +696,6 @@ class CallRecorderService : Service() {
         var finalRecordingPath: String? = null
         var isMismatch = false
 
-        // 3. BEST-FIT LOGIC: Compare OEM and Internal
         val bestOemFile = if (callLogDetails != null) {
             FileUtils.findBestSystemRecording(logEndTime, systemDuration, finalNumber, finalCallerName)
         } else null
@@ -673,7 +721,6 @@ class CallRecorderService : Service() {
             }
             internalFileValid -> {
                 finalRecordingPath = internalFile.absolutePath
-                // Only flag as mismatch if we picked up the call but are using internal recording
                 isMismatch = wasActuallyPickedUp
                 Log.d(TAG, "Choosing Internal recording (OEM missing)")
             }
@@ -683,23 +730,20 @@ class CallRecorderService : Service() {
             }
         }
 
-        // 4. Save to DB
         val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
         val startStr = sdf.format(Date(logStartTime))
         val endStr = sdf.format(Date(logEndTime))
 
-        // Use system-calculated answered time ONLY if the call was picked up
         val answeredAtStr = when {
             systemDuration > 0 -> sdf.format(Date(logEndTime - (systemDuration * 1000)))
             wasActuallyPickedUp && answeredTime > 0 -> sdf.format(Date(answeredTime))
             else -> null
         }
 
-        // We save the log regardless of recordingEnabled, but we only attach a file if enabled and picked up
         val finalFilePath = if (registration.recordingEnabled && wasActuallyPickedUp) {
             finalRecordingPath
         } else {
-            isMismatch = false // No mismatch if we are not sending a recording
+            isMismatch = false
             Log.d(TAG, "Not attaching recording (Enabled: ${registration.recordingEnabled}, PickedUp: $wasActuallyPickedUp)")
             if (finalRecordingPath != null && FileUtils.isAppRecording(applicationContext, finalRecordingPath)) {
                  File(finalRecordingPath).delete()
@@ -739,16 +783,14 @@ class CallRecorderService : Service() {
                 retryCount = 0
             )
             callRepository.saveCallLog(callLog)
-            Log.i("CALL-MAP", "✅ Call Processed: $callLog")
+            Log.i("CALL-MAP", "Call Processed: $callLog")
 
-            // 1. Immediate attempt if online (Wait for it to keep service alive)
             try {
                 callRepository.uploadPendingCallLogs(applicationContext)
             } catch (e: Exception) {
                 Log.e(TAG, "Immediate upload attempt failed", e)
             }
 
-            // 2. Reliable sync via WorkManager
             scheduleSync()
         } else {
             Log.w(TAG, "Duplicate call detected. Skipping save for $uniqueId")
@@ -763,9 +805,7 @@ class CallRecorderService : Service() {
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, java.util.concurrent.TimeUnit.SECONDS)
             .build()
-            
-        // Use KEEP to avoid interrupting an ongoing upload from a previous call (e.g. in conference)
-        // The existing worker will pick up all pending logs in its while-loop.
+
         WorkManager.getInstance(applicationContext).enqueueUniqueWork(
             CallSyncWorker.IMMEDIATE_WORK_NAME,
             ExistingWorkPolicy.KEEP,
@@ -787,7 +827,7 @@ class CallRecorderService : Service() {
                     CallLog.Calls.TYPE,
                     CallLog.Calls.CACHED_NAME
                 )
-                val timeWindow = 15_000L // Increased window for better matching
+                val timeWindow = 15_000L
                 val selection = "${CallLog.Calls.DATE} >= ? AND ${CallLog.Calls.DATE} <= ?"
                 val selectionArgs = arrayOf(
                     (startTimeMillis - timeWindow).toString(),
@@ -814,8 +854,8 @@ class CallRecorderService : Service() {
                             type == CallLog.Calls.INCOMING_TYPE ||
                                     type == CallLog.Calls.MISSED_TYPE ||
                                     type == CallLog.Calls.REJECTED_TYPE ||
-                                    type == 5 || // REJECTED_TYPE
-                                    type == 6    // BLOCKED_TYPE
+                                    type == 5 ||
+                                    type == 6
                         } else {
                             type == targetType
                         }
@@ -835,7 +875,6 @@ class CallRecorderService : Service() {
                 }
 
                 if (candidates.isNotEmpty()) {
-                    // Pick the candidate closest to our recorded start time
                     val best = candidates.minByOrNull { abs(it.timestamp - startTimeMillis) }
                     Log.d(TAG, "Found best call log match: ${best?.number} at ${best?.timestamp}")
                     return best
@@ -968,3 +1007,4 @@ class CallRecorderService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onDestroy() { super.onDestroy(); isRecording = false; serviceScope.cancel() }
 }
+
