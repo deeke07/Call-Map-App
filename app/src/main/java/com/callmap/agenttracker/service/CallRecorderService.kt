@@ -33,8 +33,6 @@ import com.callmap.agenttracker.data.worker.CallSyncWorker
 import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.repository.CallRepository
 import com.callmap.agenttracker.util.audio.VoiceEnhancer
-import com.callmap.agenttracker.util.audio.HighPassFilter
-import com.callmap.agenttracker.util.audio.LowPassFilter
 import com.callmap.agenttracker.util.file.FileUtils
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
@@ -88,6 +86,8 @@ class CallRecorderService : Service() {
         private val processingCallIds = Collections.synchronizedSet(mutableSetOf<String>())
         // Preserve preempted files across service restarts
         private val pendingInternalFiles = Collections.synchronizedMap(mutableMapOf<String, File>())
+        // Preserve per-call audio diagnostics so STOP/finalize can report verdict after joins/preemption.
+        private val pendingCaptureDiagnostics = Collections.synchronizedMap(mutableMapOf<String, CaptureDiagnostics>())
 
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
@@ -105,6 +105,33 @@ class CallRecorderService : Service() {
         private const val SAMPLE_RATE = 8000
         private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+        private const val PROBE_PEAK_THRESHOLD = 20
+        private const val SIGNAL_PEAK_THRESHOLD = 80
+        private const val SOURCE_PROBE_WINDOW_MS = 2500L
+    }
+
+    private data class CaptureDiagnostics(
+        val source: Int,
+        val sourceName: String,
+        val recordedSeconds: Double,
+        val zeroRatio: Double,
+        val strongSignalRatio: Double,
+        val maxPeak: Int,
+        val verdict: String,
+        val reason: String
+    ) {
+        fun toCompactFlag(): String = String.format(
+            Locale.US,
+            "captureVerdict=%s;source=%s;sec=%.1f;zero=%.2f;strong=%.2f;maxPeak=%d",
+            verdict,
+            sourceName,
+            recordedSeconds,
+            zeroRatio,
+            strongSignalRatio,
+            maxPeak
+        )
+
+        fun toLogLine(): String = "$verdict via $sourceName (sec=${"%.1f".format(Locale.US, recordedSeconds)}, zero=${"%.2f".format(Locale.US, zeroRatio)}, strong=${"%.2f".format(Locale.US, strongSignalRatio)}, maxPeak=$maxPeak, reason=$reason)"
     }
 
     override fun onCreate() {
@@ -153,7 +180,7 @@ class CallRecorderService : Service() {
 
                             if (activeRecordingCallId == null && recordingEnabled) {
                                 activeRecordingCallId = callId
-                                startRecordingInternal(number)
+                                startRecordingInternal(number, callId)
                             } else {
                                 Log.d(TAG, "Recording not started for $callId (Enabled: $recordingEnabled)")
                             }
@@ -242,7 +269,7 @@ class CallRecorderService : Service() {
         }
     }
 
-    private fun startRecordingInternal(number: String) {
+    private fun startRecordingInternal(number: String, callId: String) {
         Log.d(TAG, "Internal recording request for $number")
 
         recordingJob = serviceScope.launch {
@@ -251,6 +278,14 @@ class CallRecorderService : Service() {
             var localFile: File? = null
             var localTotalLen = 0L
             var originalMode = AudioManager.MODE_NORMAL
+            var chosenSource = -1
+            var totalReadBuffers = 0L
+            var zeroReadBuffers = 0L
+            var strongSignalBuffers = 0L
+            var maxPeakObserved = 0
+            var fallbackRecord: AudioRecord? = null
+            var fallbackSource = -1
+            var fallbackMaxPeak = 0
 
             try {
                 val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -276,14 +311,12 @@ class CallRecorderService : Service() {
                     return@launch
                 }
 
-                // Ultra-comprehensive source list including hidden/system sources
+                // Privileged telephony sources are blocked on most non-system builds.
+                // Keep app-accessible sources and prioritize the best chance for bidirectional capture.
                 val sourceOptions = listOf(
+                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                     MediaRecorder.AudioSource.VOICE_RECOGNITION,
                     MediaRecorder.AudioSource.UNPROCESSED,
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                    MediaRecorder.AudioSource.VOICE_CALL,
-                    MediaRecorder.AudioSource.VOICE_UPLINK,
-                    MediaRecorder.AudioSource.VOICE_DOWNLINK,
                     MediaRecorder.AudioSource.CAMCORDER,
                     MediaRecorder.AudioSource.MIC
                 )
@@ -296,7 +329,6 @@ class CallRecorderService : Service() {
 
                 val audioBuffer = ShortArray(bufferSize)
                 val enhancer = VoiceEnhancer(SAMPLE_RATE)
-                var chosenSource = -1
                 var zeroCounter = 0
 
                 for (source in sourceOptions) {
@@ -304,19 +336,15 @@ class CallRecorderService : Service() {
                     
                     Log.d(TAG, "Attempting source: $source")
                     try {
-                        val tempRecord = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                            AudioRecord.Builder()
-                                .setAudioSource(source)
-                                .setAudioFormat(AudioFormat.Builder()
-                                    .setEncoding(AUDIO_FORMAT)
-                                    .setSampleRate(SAMPLE_RATE)
-                                    .setChannelMask(CHANNEL_CONFIG)
-                                    .build())
-                                .setBufferSizeInBytes(bufferSize)
-                                .build()
-                        } else {
-                            AudioRecord(source, SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT, bufferSize)
-                        }
+                        val tempRecord = AudioRecord.Builder()
+                            .setAudioSource(source)
+                            .setAudioFormat(AudioFormat.Builder()
+                                .setEncoding(AUDIO_FORMAT)
+                                .setSampleRate(SAMPLE_RATE)
+                                .setChannelMask(CHANNEL_CONFIG)
+                                .build())
+                            .setBufferSizeInBytes(bufferSize)
+                            .build()
 
                         if (tempRecord.state != AudioRecord.STATE_INITIALIZED) {
                             tempRecord.release()
@@ -329,21 +357,24 @@ class CallRecorderService : Service() {
                             continue
                         }
 
-                        // Try this source for up to 1.5 seconds to see if it yields audio
+                        // Probe each source before locking in. We accept strong-signal sources first,
+                        // but keep VOICE_COMMUNICATION even with low initial energy to avoid false fallback.
                         var sourceYieldedData = false
+                        var sourceReadable = false
+                        var maxPeak = 0
                         val startTime = System.currentTimeMillis()
-                        while (System.currentTimeMillis() - startTime < 1500 && isRecording && isActive) {
+                        while (System.currentTimeMillis() - startTime < SOURCE_PROBE_WINDOW_MS && isRecording && isActive) {
                             val read = tempRecord.read(audioBuffer, 0, bufferSize)
                             if (read > 0) {
-                                var hasSignal = false
+                                sourceReadable = true
+                                var peak = 0
                                 for (i in 0 until read) {
-                                    if (audioBuffer[i] != 0.toShort()) {
-                                        hasSignal = true
-                                        break
-                                    }
+                                    val absSample = abs(audioBuffer[i].toInt())
+                                    if (absSample > peak) peak = absSample
                                 }
+                                if (peak > maxPeak) maxPeak = peak
 
-                                if (hasSignal) {
+                                if (peak >= PROBE_PEAK_THRESHOLD) {
                                     sourceYieldedData = true
                                     Log.i(TAG, "Source $source yielded audio! Locking in.")
                                     // Process and write this first chunk
@@ -361,24 +392,69 @@ class CallRecorderService : Service() {
                             } else if (read < 0) break
                         }
 
-                        if (sourceYieldedData) {
+                        val shouldLockSource = sourceYieldedData
+
+                        if (shouldLockSource) {
+                            fallbackRecord?.let {
+                                try {
+                                    if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) it.stop()
+                                } catch (_: Exception) {}
+                                it.release()
+                            }
+
                             localAudioRecord = tempRecord
                             audioRecord = tempRecord
                             chosenSource = source
-                            
+
                             // Try to disable processing if possible on the successful record
-                            if (NoiseSuppressor.isAvailable()) try { NoiseSuppressor.create(tempRecord.audioSessionId).enabled = false } catch(e:Exception){}
-                            if (AcousticEchoCanceler.isAvailable()) try { AcousticEchoCanceler.create(tempRecord.audioSessionId).enabled = false } catch(e:Exception){}
-                            
+                            if (NoiseSuppressor.isAvailable()) {
+                                try {
+                                    noiseSuppressor = NoiseSuppressor.create(tempRecord.audioSessionId)
+                                    noiseSuppressor?.enabled = false
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Could not configure NoiseSuppressor: ${e.message}")
+                                }
+                            }
+                            if (AcousticEchoCanceler.isAvailable()) {
+                                try {
+                                    echoCanceler = AcousticEchoCanceler.create(tempRecord.audioSessionId)
+                                    echoCanceler?.enabled = false
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Could not configure AcousticEchoCanceler: ${e.message}")
+                                }
+                            }
+
                             break // Exit source loop, we found our winner
+                        } else if (source == MediaRecorder.AudioSource.VOICE_COMMUNICATION && sourceReadable) {
+                            // Keep VOICE_COMMUNICATION only as fallback; continue searching for a stronger source.
+                            fallbackRecord?.let {
+                                try {
+                                    if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) it.stop()
+                                } catch (_: Exception) {}
+                                it.release()
+                            }
+                            fallbackRecord = tempRecord
+                            fallbackSource = source
+                            fallbackMaxPeak = maxPeak
+                            Log.w(TAG, "Keeping weak VOICE_COMMUNICATION as fallback (maxPeak=$maxPeak), testing next sources...")
                         } else {
-                            Log.w(TAG, "Source $source returned only silence, trying next...")
-                            tempRecord.stop()
+                            Log.w(TAG, "Source $source did not produce usable audio (maxPeak=$maxPeak), trying next...")
+                            try {
+                                tempRecord.stop()
+                            } catch (_: Exception) {}
                             tempRecord.release()
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to test source $source: ${e.message}")
                     }
+                }
+
+                if (localAudioRecord == null && fallbackRecord != null) {
+                    localAudioRecord = fallbackRecord
+                    audioRecord = fallbackRecord
+                    chosenSource = fallbackSource
+                    fallbackRecord = null
+                    Log.w(TAG, "Using fallback VOICE_COMMUNICATION source (maxPeak=$fallbackMaxPeak).")
                 }
 
                 val record = localAudioRecord
@@ -392,16 +468,23 @@ class CallRecorderService : Service() {
                 while (isRecording && isActive) {
                     val read = record.read(audioBuffer, 0, bufferSize)
                     if (read > 0) {
+                        totalReadBuffers++
+
                         // Check if we are getting only zeros (hardware block)
                         var isSilent = true
+                        var peak = 0
                         for (i in 0 until read) {
+                            val sampleAbs = abs(audioBuffer[i].toInt())
+                            if (sampleAbs > peak) peak = sampleAbs
                             if (audioBuffer[i] != 0.toShort()) {
                                 isSilent = false
-                                break
                             }
                         }
-                        
+                        if (peak > maxPeakObserved) maxPeakObserved = peak
+                        if (peak >= SIGNAL_PEAK_THRESHOLD) strongSignalBuffers++
+
                         if (isSilent) {
+                            zeroReadBuffers++
                             zeroCounter++
                             if (zeroCounter % 50 == 0) {
                                 Log.w(TAG, "Warning: Receiving ONLY zeros from AudioRecord ($chosenSource). Still zero after ${zeroCounter * (bufferSize.toFloat() / SAMPLE_RATE)} seconds.")
@@ -453,6 +536,17 @@ class CallRecorderService : Service() {
                     Log.e(TAG, "Error closing recording resources", e)
                 }
 
+                val diagnostics = buildCaptureDiagnostics(
+                    source = chosenSource,
+                    recordedBytes = localTotalLen,
+                    totalReadBuffers = totalReadBuffers,
+                    zeroReadBuffers = zeroReadBuffers,
+                    strongSignalBuffers = strongSignalBuffers,
+                    maxPeakObserved = maxPeakObserved
+                )
+                pendingCaptureDiagnostics[callId] = diagnostics
+                Log.i(TAG, "Capture diagnostic [$callId]: ${diagnostics.toLogLine()}")
+
                 noiseSuppressor?.release()
                 noiseSuppressor = null
                 echoCanceler?.release()
@@ -467,6 +561,13 @@ class CallRecorderService : Service() {
                     release()
                 }
                 if (localAudioRecord == audioRecord) audioRecord = null
+
+                fallbackRecord?.let {
+                    try {
+                        if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) it.stop()
+                    } catch (_: Exception) {}
+                    it.release()
+                }
             }
         }
     }
@@ -485,6 +586,7 @@ class CallRecorderService : Service() {
         startId: Int
     ) {
         val callId = "$number|$startTime|$type"
+        val captureDiagnostics = pendingCaptureDiagnostics.remove(callId)
         if (processingCallIds.contains(callId)) {
             Log.d(TAG, "Already processing $callId, skipping")
             return
@@ -597,6 +699,11 @@ class CallRecorderService : Service() {
         }
 
         val uniqueId = FileUtils.generateUniqueId(registration.deviceUuid, startStr, endStr, finalNumber, finalType)
+        val enrichedMetaData = mergeMetaDataWithCaptureDiagnostic(metaData, captureDiagnostics)
+
+        captureDiagnostics?.let {
+            Log.i(TAG, "Final capture verdict for $callId: ${it.toLogLine()}")
+        }
 
         if (!callRepository.exists(uniqueId)) {
             val callLog = CallLogEntity(
@@ -619,7 +726,7 @@ class CallRecorderService : Service() {
                 batteryLevel = batteryLevel.toString(),
                 apkVersion = apkVersion,
                 spotSettingVersion = null,
-                metaData = metaData,
+                metaData = enrichedMetaData,
                 retryCount = 0
             )
             callRepository.saveCallLog(callLog)
@@ -733,6 +840,56 @@ class CallRecorderService : Service() {
     }
 
     private data class SystemCallLogInfo(val number: String?, val name: String?, val duration: Long, val type: Int, val timestamp: Long)
+
+    private fun buildCaptureDiagnostics(
+        source: Int,
+        recordedBytes: Long,
+        totalReadBuffers: Long,
+        zeroReadBuffers: Long,
+        strongSignalBuffers: Long,
+        maxPeakObserved: Int
+    ): CaptureDiagnostics {
+        val sourceName = when (source) {
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION -> "VOICE_COMMUNICATION"
+            MediaRecorder.AudioSource.VOICE_RECOGNITION -> "VOICE_RECOGNITION"
+            MediaRecorder.AudioSource.UNPROCESSED -> "UNPROCESSED"
+            MediaRecorder.AudioSource.CAMCORDER -> "CAMCORDER"
+            MediaRecorder.AudioSource.MIC -> "MIC"
+            else -> "UNKNOWN($source)"
+        }
+
+        val recordedSeconds = if (recordedBytes > 0) recordedBytes.toDouble() / (SAMPLE_RATE * 2.0) else 0.0
+        val zeroRatio = if (totalReadBuffers > 0) zeroReadBuffers.toDouble() / totalReadBuffers.toDouble() else 1.0
+        val strongRatio = if (totalReadBuffers > 0) strongSignalBuffers.toDouble() / totalReadBuffers.toDouble() else 0.0
+
+        val (verdict, reason) = when {
+            recordedSeconds < 1.0 || (zeroRatio > 0.97 && strongRatio < 0.02) -> "LIKELY_BLOCKED_OR_SILENT" to "almost all buffers silent"
+            source == MediaRecorder.AudioSource.VOICE_COMMUNICATION && strongRatio >= 0.15 && zeroRatio < 0.90 -> "POSSIBLE_TWO_WAY" to "voice communication source with sustained non-silent signal"
+            source == MediaRecorder.AudioSource.MIC || source == MediaRecorder.AudioSource.CAMCORDER -> "LIKELY_MIC_ONLY" to "fallback to mic-like source"
+            else -> "UNCERTAIN" to "signal present but pattern is not conclusive"
+        }
+
+        return CaptureDiagnostics(
+            source = source,
+            sourceName = sourceName,
+            recordedSeconds = recordedSeconds,
+            zeroRatio = zeroRatio,
+            strongSignalRatio = strongRatio,
+            maxPeak = maxPeakObserved,
+            verdict = verdict,
+            reason = reason
+        )
+    }
+
+    private fun mergeMetaDataWithCaptureDiagnostic(metaData: String?, diagnostics: CaptureDiagnostics?): String? {
+        if (diagnostics == null) return metaData
+        val captureFlag = diagnostics.toCompactFlag()
+        return when {
+            metaData.isNullOrBlank() -> captureFlag
+            metaData.contains("captureVerdict=") -> metaData
+            else -> "$metaData | $captureFlag"
+        }
+    }
 
     private fun normalizeNumber(number: String?): String {
         return number?.filter { it.isDigit() }?.takeLast(10) ?: ""
