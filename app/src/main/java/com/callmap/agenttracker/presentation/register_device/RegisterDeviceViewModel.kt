@@ -4,7 +4,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.callmap.agenttracker.domain.use_case.RegisterDeviceUseCase
+import com.callmap.agenttracker.domain.usecase.RegisterDeviceUseCase
 import com.callmap.agenttracker.util.Resource
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow

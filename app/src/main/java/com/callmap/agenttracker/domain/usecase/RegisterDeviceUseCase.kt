@@ -1,10 +1,9 @@
-package com.callmap.agenttracker.domain.use_case
+package com.callmap.agenttracker.domain.usecase
 
 import android.annotation.SuppressLint
 import android.content.Context
 import android.os.BatteryManager
 import android.os.Build
-import android.provider.Settings
 import com.callmap.agenttracker.BuildConfig
 import com.callmap.agenttracker.data.remote.dto.DeviceRegistrationRequest
 import com.callmap.agenttracker.domain.manager.SessionManager
@@ -24,34 +23,35 @@ class RegisterDeviceUseCase @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     @SuppressLint("HardwareIds")
-    operator fun invoke(passcode: String, email: String): Flow<Resource<RegistrationResult>> = flow {
-        emit(Resource.Loading())
+    operator fun invoke(passcode: String, email: String): Flow<Resource<RegistrationResult>> =
+        flow {
+            emit(Resource.Loading())
 
-        //val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+            //val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
 
-        val appVersion = BuildConfig.VERSION_NAME
-        
-        val pushToken = try {
-            FirebaseMessaging.getInstance().token.await()
-        } catch (e: Exception) {
-            null
+            val appVersion = BuildConfig.VERSION_NAME
+
+            val pushToken = try {
+                FirebaseMessaging.getInstance().token.await()
+            } catch (e: Exception) {
+                null
+            }
+
+            val request = DeviceRegistrationRequest(
+                passcode = passcode,
+                userEmail = email,
+                deviceName = "${Build.MODEL} - ${email.substringBefore("@")}",
+                deviceToken = pushToken,
+                platform = "android",
+                deviceModel = Build.MODEL,
+                appVersion = appVersion,
+                batteryLevel = getBatteryLevel(context),
+                pushToken = pushToken
+            )
+
+            val result = repository.registerDevice(request)
+            emit(result)
         }
-
-        val request = DeviceRegistrationRequest(
-            passcode = passcode,
-            userEmail = email,
-            deviceName = "${Build.MODEL} - ${email.substringBefore("@")}",
-            deviceToken = pushToken,
-            platform = "android",
-            deviceModel = Build.MODEL,
-            appVersion = appVersion,
-            batteryLevel = getBatteryLevel(context),
-            pushToken = pushToken
-        )
-
-        val result = repository.registerDevice(request)
-        emit(result)
-    }
 
     fun getBatteryLevel(context: Context): Int {
         val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
