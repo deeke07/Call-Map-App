@@ -5,9 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.NoiseSuppressor
 import android.net.Uri
 import android.os.Build
@@ -15,6 +18,7 @@ import android.os.IBinder
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.util.Log
+import android.content.Context
 import androidx.core.app.NotificationCompat
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -65,6 +69,7 @@ class CallRecorderService : Service() {
     // State for the single active internal recording
     private var audioRecord: AudioRecord? = null
     private var noiseSuppressor: NoiseSuppressor? = null
+    private var echoCanceler: AcousticEchoCanceler? = null
     @Volatile private var isRecording = false
     @Volatile private var recordingFile: File? = null
     @Volatile private var recordingJob: Job? = null
@@ -97,7 +102,7 @@ class CallRecorderService : Service() {
         const val EXTRA_RECORDING_ENABLED = "EXTRA_RECORDING_ENABLED"
         const val EXTRA_META_DATA = "EXTRA_META_DATA"
 
-        private const val SAMPLE_RATE = 44100
+        private const val SAMPLE_RATE = 8000
         private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
     }
@@ -126,7 +131,11 @@ class CallRecorderService : Service() {
         Log.d(TAG, "onStartCommand: action=$action, callId=$callId")
 
         // Ensure service is foregrounded immediately
-        startForeground(54321, createNotification("Processing call with $number"))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            startForeground(54321, createNotification("Processing call with $number"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+        } else {
+            startForeground(54321, createNotification("Processing call with $number"))
+        }
 
         when (action) {
             ACTION_START -> {
@@ -241,10 +250,22 @@ class CallRecorderService : Service() {
             var localFos: FileOutputStream? = null
             var localFile: File? = null
             var localTotalLen = 0L
+            var originalMode = AudioManager.MODE_NORMAL
 
             try {
-                // Give the system a moment to release hardware from any previous call/preemption
-                delay(600)
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                originalMode = audioManager.mode
+                
+                // Attempting to set mode to MODE_IN_COMMUNICATION to prioritize audio capture
+                try {
+                    audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                    Log.d(TAG, "AudioManager mode set to MODE_IN_COMMUNICATION")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not set AudioManager mode: ${e.message}")
+                }
+
+                // Give the system more time to release hardware from the dialer's initial lock
+                delay(1200)
 
                 isRecording = true
 
@@ -255,56 +276,142 @@ class CallRecorderService : Service() {
                     return@launch
                 }
 
-                localAudioRecord = AudioRecord(
+                // Ultra-comprehensive source list including hidden/system sources
+                val sourceOptions = listOf(
                     MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                    SAMPLE_RATE,
-                    CHANNEL_CONFIG,
-                    AUDIO_FORMAT,
-                    bufferSize
+                    MediaRecorder.AudioSource.UNPROCESSED,
+                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                    MediaRecorder.AudioSource.VOICE_CALL,
+                    MediaRecorder.AudioSource.VOICE_UPLINK,
+                    MediaRecorder.AudioSource.VOICE_DOWNLINK,
+                    MediaRecorder.AudioSource.CAMCORDER,
+                    MediaRecorder.AudioSource.MIC
                 )
-
-                if (localAudioRecord.state != AudioRecord.STATE_INITIALIZED) {
-                    isRecording = false
-                    return@launch
-                }
-
-                audioRecord = localAudioRecord
-
-                if (NoiseSuppressor.isAvailable()) {
-                    noiseSuppressor = NoiseSuppressor.create(localAudioRecord.audioSessionId)
-                    noiseSuppressor?.enabled = true
-                }
-
-                try {
-                    localAudioRecord.startRecording()
-                    if (localAudioRecord.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                        isRecording = false
-                        return@launch
-                    }
-                } catch (e: Exception) {
-                    isRecording = false
-                    return@launch
-                }
-
-                Log.d(TAG, "Internal recording actually started for $number")
 
                 val fileName = "call_${System.currentTimeMillis()}.wav"
                 localFile = FileUtils.getRecordingFile(applicationContext, fileName)
                 recordingFile = localFile
-
                 localFos = FileOutputStream(localFile)
                 localFos.write(ByteArray(44)) // Dummy header
 
                 val audioBuffer = ShortArray(bufferSize)
-                val hpFilter = HighPassFilter(200f, SAMPLE_RATE)
-                val lpFilter = LowPassFilter(4000f, SAMPLE_RATE)
                 val enhancer = VoiceEnhancer(SAMPLE_RATE)
+                var chosenSource = -1
+                var zeroCounter = 0
 
+                for (source in sourceOptions) {
+                    if (!isRecording || !isActive) break
+                    
+                    Log.d(TAG, "Attempting source: $source")
+                    try {
+                        val tempRecord = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            AudioRecord.Builder()
+                                .setAudioSource(source)
+                                .setAudioFormat(AudioFormat.Builder()
+                                    .setEncoding(AUDIO_FORMAT)
+                                    .setSampleRate(SAMPLE_RATE)
+                                    .setChannelMask(CHANNEL_CONFIG)
+                                    .build())
+                                .setBufferSizeInBytes(bufferSize)
+                                .build()
+                        } else {
+                            AudioRecord(source, SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT, bufferSize)
+                        }
+
+                        if (tempRecord.state != AudioRecord.STATE_INITIALIZED) {
+                            tempRecord.release()
+                            continue
+                        }
+
+                        tempRecord.startRecording()
+                        if (tempRecord.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                            tempRecord.release()
+                            continue
+                        }
+
+                        // Try this source for up to 1.5 seconds to see if it yields audio
+                        var sourceYieldedData = false
+                        val startTime = System.currentTimeMillis()
+                        while (System.currentTimeMillis() - startTime < 1500 && isRecording && isActive) {
+                            val read = tempRecord.read(audioBuffer, 0, bufferSize)
+                            if (read > 0) {
+                                var hasSignal = false
+                                for (i in 0 until read) {
+                                    if (audioBuffer[i] != 0.toShort()) {
+                                        hasSignal = true
+                                        break
+                                    }
+                                }
+
+                                if (hasSignal) {
+                                    sourceYieldedData = true
+                                    Log.i(TAG, "Source $source yielded audio! Locking in.")
+                                    // Process and write this first chunk
+                                    enhancer.process(audioBuffer, read)
+                                    val byteBuffer = ByteArray(read * 2)
+                                    for (i in 0 until read) {
+                                        val sample = audioBuffer[i].toInt()
+                                        byteBuffer[i * 2] = (sample and 0xff).toByte()
+                                        byteBuffer[i * 2 + 1] = ((sample shr 8) and 0xff).toByte()
+                                    }
+                                    localFos.write(byteBuffer)
+                                    localTotalLen += byteBuffer.size
+                                    break
+                                }
+                            } else if (read < 0) break
+                        }
+
+                        if (sourceYieldedData) {
+                            localAudioRecord = tempRecord
+                            audioRecord = tempRecord
+                            chosenSource = source
+                            
+                            // Try to disable processing if possible on the successful record
+                            if (NoiseSuppressor.isAvailable()) try { NoiseSuppressor.create(tempRecord.audioSessionId).enabled = false } catch(e:Exception){}
+                            if (AcousticEchoCanceler.isAvailable()) try { AcousticEchoCanceler.create(tempRecord.audioSessionId).enabled = false } catch(e:Exception){}
+                            
+                            break // Exit source loop, we found our winner
+                        } else {
+                            Log.w(TAG, "Source $source returned only silence, trying next...")
+                            tempRecord.stop()
+                            tempRecord.release()
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to test source $source: ${e.message}")
+                    }
+                }
+
+                val record = localAudioRecord
+                if (record == null) {
+                    Log.e(TAG, "All sources failed or returned silence.")
+                    isRecording = false
+                    return@launch
+                }
+
+                // Main recording loop for the chosen source
                 while (isRecording && isActive) {
-                    val read = localAudioRecord.read(audioBuffer, 0, bufferSize)
+                    val read = record.read(audioBuffer, 0, bufferSize)
                     if (read > 0) {
-                        hpFilter.process(audioBuffer, read)
-                        lpFilter.process(audioBuffer, read)
+                        // Check if we are getting only zeros (hardware block)
+                        var isSilent = true
+                        for (i in 0 until read) {
+                            if (audioBuffer[i] != 0.toShort()) {
+                                isSilent = false
+                                break
+                            }
+                        }
+                        
+                        if (isSilent) {
+                            zeroCounter++
+                            if (zeroCounter % 50 == 0) {
+                                Log.w(TAG, "Warning: Receiving ONLY zeros from AudioRecord ($chosenSource). Still zero after ${zeroCounter * (bufferSize.toFloat() / SAMPLE_RATE)} seconds.")
+                            }
+                        } else {
+                            if (zeroCounter > 0) Log.i(TAG, "Signal regained after $zeroCounter zero-buffers.")
+                            zeroCounter = 0
+                        }
+
+                        // Apply dynamic enhancement
                         enhancer.process(audioBuffer, read)
 
                         val byteBuffer = ByteArray(read * 2)
@@ -316,13 +423,22 @@ class CallRecorderService : Service() {
                         localFos.write(byteBuffer)
                         localTotalLen += byteBuffer.size
                     } else if (read < 0) {
+                        Log.w(TAG, "AudioRecord.read() returned error: $read")
                         break
                     }
                 }
             } catch (e: Exception) {
-                // Silently handle exceptions to avoid crashing the service scope
+                Log.e(TAG, "Exception in recording loop: ${e.message}", e)
             } finally {
                 isRecording = false
+                
+                // Restore original audio mode
+                try {
+                    val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                    am.mode = originalMode
+                    Log.d(TAG, "AudioManager mode restored to $originalMode")
+                } catch (e: Exception) { }
+
                 try {
                     localFos?.close()
                     if (localTotalLen > 0 && localFile != null) {
@@ -339,6 +455,8 @@ class CallRecorderService : Service() {
 
                 noiseSuppressor?.release()
                 noiseSuppressor = null
+                echoCanceler?.release()
+                echoCanceler = null
 
                 localAudioRecord?.apply {
                     try {

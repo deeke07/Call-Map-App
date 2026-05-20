@@ -24,6 +24,8 @@ import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
+import android.app.Activity
 import com.callmap.agenttracker.presentation.register_device.components.QrScannerDialog
 import org.json.JSONObject
 import android.widget.Toast
@@ -39,6 +41,18 @@ fun RegisterDeviceScreen(
     val context = LocalContext.current
 
     var showQrScanner by remember { mutableStateOf(false) }
+    
+    // Handle back press to prevent accidental exit
+    var lastBackPressTime by remember { mutableLongStateOf(0L) }
+    BackHandler {
+        val currentTime = System.currentTimeMillis()
+        if (currentTime - lastBackPressTime < 2000) {
+            (context as? Activity)?.finish()
+        } else {
+            lastBackPressTime = currentTime
+            Toast.makeText(context, "Press back again to exit", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()

@@ -59,16 +59,17 @@ class LowPassFilter(cutoffFrequency: Float, sampleRate: Int) : AudioFilter {
 class VoiceEnhancer(
     private val sampleRate: Int
 ) : AudioFilter {
-    private var smoothedRms = 0.01f
-    private val targetRms = 0.25f
-    private val maxGain = 50.0f
+    private var smoothedRms = 0.0001f
+    private val targetRms = 0.6f
+    private val maxGain = 500.0f
     
     // Timing constants for gain adjustment
-    private val attackTime = 0.02f  // Fast attack to clamp loud sounds
-    private val releaseTime = 0.4f  // Slower release to keep remote voice audible
+    private val attackTime = 0.005f  // Even faster attack to clamp loud sounds
+    private val releaseTime = 0.5f   // Slower release to keep remote voice audible
     
     private val attackCoeff = exp(-1.0 / (sampleRate * attackTime)).toFloat()
     private val releaseCoeff = exp(-1.0 / (sampleRate * releaseTime)).toFloat()
+    private var sampleCounter = 0
 
     override fun process(samples: ShortArray, numSamples: Int) {
         for (i in 0 until numSamples) {
@@ -79,9 +80,15 @@ class VoiceEnhancer(
             val coeff = if (absSample > smoothedRms) attackCoeff else releaseCoeff
             smoothedRms = coeff * smoothedRms + (1.0f - coeff) * absSample
             
-            // Calculate dynamic gain
-            var gain = targetRms / (smoothedRms + 0.005f)
+            // Calculate dynamic gain (Ultra-aggressive for Samsung earpiece leakage)
+            var gain = targetRms / (smoothedRms + 1e-7f)
             gain = gain.coerceIn(1.0f, maxGain)
+            
+            // Debug logging to check signal level
+            if (++sampleCounter >= sampleRate * 2) { // Log approx every 2 seconds
+                android.util.Log.d("VoiceEnhancer", "RMS: $smoothedRms, Applied Gain: $gain")
+                sampleCounter = 0
+            }
             
             var processed = sample * gain
             
