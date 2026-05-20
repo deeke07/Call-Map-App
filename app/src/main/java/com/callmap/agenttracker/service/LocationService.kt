@@ -8,6 +8,7 @@ import android.os.*
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.callmap.agenttracker.data.local.entity.LocationEntity
+import com.callmap.agenttracker.domain.manager.EventManager
 import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.manager.SyncManager
 import com.callmap.agenttracker.domain.repository.LocationRepository
@@ -38,10 +39,14 @@ class LocationService : Service() {
     @Inject
     lateinit var shouldTrackLocationUseCase: ShouldTrackLocationUseCase
 
+    @Inject
+    lateinit var eventManager: EventManager
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private var wakeLock: PowerManager.WakeLock? = null
     private var trackingJob: Job? = null
+    private var isStoppingIntentionally = false
 
     companion object {
         private const val TAG = "LocationService"
@@ -77,6 +82,7 @@ class LocationService : Service() {
     }
 
     private fun startTracking(startId: Int) {
+        isStoppingIntentionally = false
         if (wakeLock?.isHeld == false) wakeLock?.acquire(10000L)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -124,19 +130,21 @@ class LocationService : Service() {
             Log.i(TAG, "Long Interval Strategy: Fetching location fix...")
             fetchAndProcessLocation()
             
+            // Log Heartbeat
+            eventManager.logEvent("TRACKING_HEARTBEAT", metadata = mapOf("strategy" to "long_interval", "interval" to intervalMs))
+
             Log.i(TAG, "Scheduling next alarm-based fix in ${intervalMs / 1000}s. Service remains in foreground.")
             scheduleNextAlarm(intervalMs)
-            
-            // We DO NOT call stopSelf or stopForeground here.
-            // This keeps the notification visible to the user at all times.
         } else {
             Log.d(TAG, "Outside tracking window. Stopping tracking service.")
+            eventManager.logEvent("TRACKING_STOPPED_BY_SCHEDULE", metadata = mapOf("reason" to "outside_window"))
             stopTracking(startId)
         }
     }
 
     private suspend fun runShortIntervalLoop(intervalMs: Long, startId: Int) {
         Log.i(TAG, "Short Interval Loop: ${intervalMs / 1000}s")
+        var lastHeartbeat = 0L
         while (true) {
             yield()
             val cycleStartTime = System.currentTimeMillis()
@@ -144,10 +152,19 @@ class LocationService : Service() {
 
             if (shouldTrackLocationUseCase(cycleStartTime, registration)) {
                 fetchAndProcessLocation()
+                
+                // Heartbeat every 15 minutes in short loop to avoid log spam
+                if (cycleStartTime - lastHeartbeat > 15 * 60 * 1000L) {
+                    eventManager.logEvent("TRACKING_HEARTBEAT", metadata = mapOf("strategy" to "short_loop", "interval" to intervalMs))
+                    lastHeartbeat = cycleStartTime
+                }
+
                 val fetchDuration = System.currentTimeMillis() - cycleStartTime
                 val nextDelay = (intervalMs - fetchDuration).coerceAtLeast(2000L)
                 delay(nextDelay)
             } else {
+                Log.d(TAG, "Outside tracking window (Loop). Stopping.")
+                eventManager.logEvent("TRACKING_STOPPED_BY_SCHEDULE", metadata = mapOf("reason" to "outside_window_loop"))
                 stopTracking(startId)
                 break
             }
@@ -202,6 +219,7 @@ class LocationService : Service() {
     }
 
     private fun stopTracking(startId: Int? = null) {
+        isStoppingIntentionally = true
         trackingJob?.cancel()
         if (wakeLock?.isHeld == true) wakeLock?.release()
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -236,7 +254,24 @@ class LocationService : Service() {
     }
 
     override fun onBind(intent: Intent?) = null
-    override fun onDestroy() { stopTracking(); serviceScope.cancel(); super.onDestroy() }
+    override fun onDestroy() {
+        if (!isStoppingIntentionally) {
+            serviceScope.launch {
+                val registration = sessionManager.getRegistration().first()
+                if (registration != null && registration.trackingEnabled &&
+                    shouldTrackLocationUseCase(System.currentTimeMillis(), registration)
+                ) {
+                    eventManager.logEvent(
+                        EventManager.LOCATION_TRACKING_STOPPED,
+                        metadata = mapOf("reason" to "unexpected_service_destruction")
+                    )
+                }
+            }
+        }
+        stopTracking()
+        serviceScope.cancel()
+        super.onDestroy()
+    }
 }
 
 suspend fun <T> com.google.android.gms.tasks.Task<T>.await(): T? = suspendCancellableCoroutine { cont ->

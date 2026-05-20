@@ -10,4 +10,5 @@ interface ServiceManager {
     fun handleServiceLifecycle(trackingEnabled: Boolean)
     fun <T : Service> isServiceRunning(serviceClass: Class<T>): Boolean
     fun createNotification(content: String): Notification
+    fun runWatchdogCheck()
 }

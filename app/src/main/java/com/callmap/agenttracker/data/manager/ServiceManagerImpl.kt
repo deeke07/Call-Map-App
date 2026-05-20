@@ -80,6 +80,14 @@ class ServiceManagerImpl @Inject constructor(
         }
     }
 
+    override fun runWatchdogCheck() {
+        Log.d("ServiceManager", "Watchdog check triggered")
+        val intent = Intent(context, com.callmap.agenttracker.receiver.ScheduleReceiver::class.java).apply {
+            action = "WATCHDOG_CHECK"
+        }
+        context.sendBroadcast(intent)
+    }
+
     override fun handleServiceLifecycle(trackingEnabled: Boolean) {
         val isRunning = isServiceRunning(LocationService::class.java)
         Log.d("ServiceManager", "handleServiceLifecycle: trackingEnabled=$trackingEnabled, isRunning=$isRunning")

@@ -23,7 +23,7 @@ class ScheduleReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
-        Log.i("ScheduleReceiver", "Alarm Received! Action: $action")
+        Log.i("ScheduleReceiver", "Broadcast Received! Action: $action")
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ScheduleReceiver::WakeLock")
@@ -32,19 +32,27 @@ class ScheduleReceiver : BroadcastReceiver() {
         when (action) {
             ACTION_LOCATION_ALARM -> {
                 Log.i("ScheduleReceiver", "Triggering LocationService from Alarm.")
-                val serviceIntent = Intent(context, LocationService::class.java).apply {
-                    this.action = LocationService.ACTION_START
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(serviceIntent)
-                } else {
-                    context.startService(serviceIntent)
-                }
+                startLocationService(context)
             }
-            else -> {
-                Log.i("ScheduleReceiver", "Triggering Tracking Audit.")
+            "WATCHDOG_CHECK" -> {
+                Log.i("ScheduleReceiver", "Watchdog triggered audit.")
                 syncManager.scheduleTrackingAudit()
             }
+            else -> {
+                Log.i("ScheduleReceiver", "Triggering Tracking Audit (Action: $action).")
+                syncManager.scheduleTrackingAudit()
+            }
+        }
+    }
+
+    private fun startLocationService(context: Context) {
+        val serviceIntent = Intent(context, LocationService::class.java).apply {
+            action = LocationService.ACTION_START
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(serviceIntent)
+        } else {
+            context.startService(serviceIntent)
         }
     }
 }

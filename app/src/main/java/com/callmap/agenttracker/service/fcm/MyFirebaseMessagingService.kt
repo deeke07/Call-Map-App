@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import com.callmap.agenttracker.MainActivity
 import com.callmap.agenttracker.R
 import com.callmap.agenttracker.domain.usecase.FetchConfigUseCase
+import com.callmap.agenttracker.domain.manager.ServiceManager
 import com.callmap.agenttracker.service.CallReceiver
 import com.callmap.agenttracker.service.controller.ServiceController
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -32,6 +33,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     @Inject
     lateinit var serviceController: ServiceController
 
+    @Inject
+    lateinit var serviceManager: ServiceManager
+
     companion object {
         private const val CHANNEL_ID = "fcm_default_v1"
         private const val NOTIFICATION_ID = 1001
@@ -42,6 +46,9 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
         Log.i("FCM", "Message received! Data payload: ${message.data}")
+
+        // Heartbeat/Watchdog: App is alive via FCM
+        serviceManager.runWatchdogCheck()
 
         val type = message.data["type"]
         val title = message.data["title"] ?: "Settings Updated"

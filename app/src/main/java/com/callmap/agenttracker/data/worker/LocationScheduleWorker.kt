@@ -27,27 +27,10 @@ class LocationScheduleWorker @AssistedInject constructor(
         private const val TAG = "LocationScheduleWorker"
     }
 
-    override suspend fun getForegroundInfo(): ForegroundInfo {
-        val notification = serviceManager.createNotification("Syncing location schedule...")
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ForegroundInfo(12346, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-        } else {
-            ForegroundInfo(12346, notification)
-        }
-    }
-
     override suspend fun doWork(): Result {
         Log.d(TAG, "Executing expedited tracking audit...")
         
         try {
-            // Ensure the worker itself is in foreground so the notification stays visible
-            // while we transition to the actual LocationService.
-            try {
-                setForeground(getForegroundInfo())
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to set worker to foreground: ${e.message}")
-            }
-
             val settings = sessionManager.getRegistration().first()
             if (settings == null) {
                 Log.w(TAG, "No settings found. Stopping tracking.")

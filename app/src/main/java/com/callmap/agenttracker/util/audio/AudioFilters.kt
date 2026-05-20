@@ -2,6 +2,7 @@ package com.callmap.agenttracker.util.audio
 
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.sign
 import kotlin.math.sqrt
 
@@ -52,33 +53,45 @@ class LowPassFilter(cutoffFrequency: Float, sampleRate: Int) : AudioFilter {
 }
 
 /**
- * Combined Compressor and AGC.
- * It squeezes loud sounds (like the local speaker) so that quiet sounds (like the remote caller) 
- * can be amplified without causing distortion (clipping).
+ * Improved Voice Enhancer with Dynamic AGC and Soft Limiter.
+ * Designed to boost faint remote voices while keeping local voice clear.
  */
 class VoiceEnhancer(
-    private val targetGain: Float = 25.0f,
-    private val compressionThreshold: Float = 0.2f, // 20% of max volume
-    private val compressionRatio: Float = 8.0f     // Squeeze loud parts by 8x
+    private val sampleRate: Int
 ) : AudioFilter {
+    private var smoothedRms = 0.01f
+    private val targetRms = 0.25f
+    private val maxGain = 50.0f
+    
+    // Timing constants for gain adjustment
+    private val attackTime = 0.02f  // Fast attack to clamp loud sounds
+    private val releaseTime = 0.4f  // Slower release to keep remote voice audible
+    
+    private val attackCoeff = exp(-1.0 / (sampleRate * attackTime)).toFloat()
+    private val releaseCoeff = exp(-1.0 / (sampleRate * releaseTime)).toFloat()
 
     override fun process(samples: ShortArray, numSamples: Int) {
         for (i in 0 until numSamples) {
-            // Normalize to -1.0 to 1.0
-            var sample = samples[i] / 32768.0f
-            
-            // 1. Compression: Squeeze loud signals
+            val sample = samples[i] / 32768.0f
             val absSample = abs(sample)
-            if (absSample > compressionThreshold) {
-                val excess = absSample - compressionThreshold
-                sample = sign(sample) * (compressionThreshold + excess / compressionRatio)
+            
+            // Envelope follower with asymmetric attack/release
+            val coeff = if (absSample > smoothedRms) attackCoeff else releaseCoeff
+            smoothedRms = coeff * smoothedRms + (1.0f - coeff) * absSample
+            
+            // Calculate dynamic gain
+            var gain = targetRms / (smoothedRms + 0.005f)
+            gain = gain.coerceIn(1.0f, maxGain)
+            
+            var processed = sample * gain
+            
+            // Soft Limiter: Prevents harsh digital clipping by rounding off peaks
+            if (abs(processed) > 0.8f) {
+                val excess = abs(processed) - 0.8f
+                processed = sign(processed) * (0.8f + excess / (1.0f + excess * 4.0f))
             }
-            
-            // 2. Aggressive Gain: Boost everything
-            sample *= targetGain
-            
-            // 3. Hard Clipping Protection
-            samples[i] = (sample * 32768.0f).toInt().coerceIn(-32768, 32767).toShort()
+
+            samples[i] = (processed * 32768.0f).toInt().coerceIn(-32768, 32767).toShort()
         }
     }
 }

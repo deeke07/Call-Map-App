@@ -296,9 +296,9 @@ class CallRecorderService : Service() {
                 localFos.write(ByteArray(44)) // Dummy header
 
                 val audioBuffer = ShortArray(bufferSize)
-                val hpFilter = HighPassFilter(300f, SAMPLE_RATE)
-                val lpFilter = LowPassFilter(3400f, SAMPLE_RATE)
-                val enhancer = VoiceEnhancer(targetGain = 30.0f, compressionThreshold = 0.15f)
+                val hpFilter = HighPassFilter(200f, SAMPLE_RATE)
+                val lpFilter = LowPassFilter(4000f, SAMPLE_RATE)
+                val enhancer = VoiceEnhancer(SAMPLE_RATE)
 
                 while (isRecording && isActive) {
                     val read = localAudioRecord.read(audioBuffer, 0, bufferSize)

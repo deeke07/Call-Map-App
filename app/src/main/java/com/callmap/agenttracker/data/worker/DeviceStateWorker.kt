@@ -18,6 +18,8 @@ import com.callmap.agenttracker.data.manager.DeviceStateManager
 import com.callmap.agenttracker.domain.manager.EventManager
 import com.callmap.agenttracker.domain.manager.ServiceManager
 import com.callmap.agenttracker.domain.repository.DeviceEventRepository
+import com.callmap.agenttracker.domain.usecase.location.ShouldTrackLocationUseCase
+import com.callmap.agenttracker.service.LocationService
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.flow.first
@@ -29,7 +31,8 @@ class DeviceStateWorker @AssistedInject constructor(
     @Assisted params: WorkerParameters,
     private val stateManager: DeviceStateManager,
     private val serviceManager: ServiceManager,
-    private val eventRepository: DeviceEventRepository
+    private val eventRepository: DeviceEventRepository,
+    private val shouldTrackLocationUseCase: ShouldTrackLocationUseCase
 ) : CoroutineWorker(context, params) {
 
     companion object {
@@ -76,6 +79,24 @@ class DeviceStateWorker @AssistedInject constructor(
         checkBackgroundRestriction()
         checkNetworkState()
         checkSimState()
+        checkLocationService()
+    }
+
+    private suspend fun checkLocationService() {
+        val registration = stateManager.sessionManager.getRegistration().first()
+        val isTrackingEnabled = registration?.trackingEnabled == true
+        val shouldBeTracking = shouldTrackLocationUseCase(System.currentTimeMillis(), registration)
+        val isRunning = serviceManager.isServiceRunning(LocationService::class.java)
+
+        if (isTrackingEnabled && shouldBeTracking && !isRunning) {
+            Log.w(TAG, "Location tracking service is STOPPED but should be RUNNING. Logging event.")
+            eventRepository.logEvent(
+                EventManager.LOCATION_TRACKING_STOPPED,
+                metadata = mapOf("reason" to "unexpectedly_stopped_detected_by_worker")
+            )
+            // Trigger watchdog to attempt self-healing
+            serviceManager.runWatchdogCheck()
+        }
     }
 
     private suspend fun checkPermissions() {

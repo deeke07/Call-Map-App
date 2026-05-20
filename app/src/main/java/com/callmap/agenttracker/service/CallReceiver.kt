@@ -22,6 +22,9 @@ class CallReceiver : BroadcastReceiver() {
     @Inject
     lateinit var sessionManager: SessionManager
 
+    @Inject
+    lateinit var serviceManager: com.callmap.agenttracker.domain.manager.ServiceManager
+
     companion object {
         private const val TAG = "CallReceiver"
 
@@ -61,6 +64,9 @@ class CallReceiver : BroadcastReceiver() {
                 val number = intent.getStringExtra(Intent.EXTRA_PHONE_NUMBER) ?: "Unknown"
                 Log.d(TAG, "Outgoing call initiated: $number")
 
+                // Trigger Watchdog check on outgoing call
+                serviceManager.runWatchdogCheck()
+
                 // Create new call data
                 currentCallData = CallData(
                     number = number,
@@ -90,6 +96,9 @@ class CallReceiver : BroadcastReceiver() {
                 }
 
                 if (incomingNumber != null && state == TelephonyManager.CALL_STATE_RINGING) {
+                    // Trigger Watchdog check on incoming call
+                    serviceManager.runWatchdogCheck()
+
                     // Incoming call ringing
                     val active = currentCallData
                     if (active != null && active.wasAnswered && !active.isSaved) {
