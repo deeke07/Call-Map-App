@@ -158,6 +158,7 @@ class CallRepositoryImpl @Inject constructor(
         return try {
             syncMutex.withLock {
                 var totalSuccess = 0
+                var someFailed = false
                 val attemptedIds = mutableSetOf<String>()
 
                 while (true) {
@@ -180,6 +181,8 @@ class CallRepositoryImpl @Inject constructor(
                                     File(path).let { if (it.exists()) it.delete() }
                                 }
                             }
+                        } else {
+                            someFailed = true
                         }
                     }
                     
@@ -188,8 +191,12 @@ class CallRepositoryImpl @Inject constructor(
                 }
                 
                 Log.d(TAG, "Sync process finished. Total success: $totalSuccess")
+                if (someFailed) {
+                    Result.failure(Exception("One or more call uploads failed; will retry"))
+                } else {
+                    Result.success(Unit)
+                }
             }
-            Result.success(Unit)
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             Log.e(TAG, "Error in batch upload", e)
