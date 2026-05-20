@@ -57,12 +57,14 @@ class LowPassFilter(cutoffFrequency: Float, sampleRate: Int) : AudioFilter {
  * Designed to boost faint remote voices while keeping local voice clear.
  */
 class VoiceEnhancer(
-    private val sampleRate: Int
+    private val sampleRate: Int,
+    private val targetRms: Float = 0.75f,
+    private val minGain: Float = 1.2f,
+    private val maxGain: Float = 900.0f,
+    private val extraQuietBoost: Float = 1.8f
 ) : AudioFilter {
     private var smoothedRms = 0.0001f
-    private val targetRms = 0.6f
-    private val maxGain = 500.0f
-    
+
     // Timing constants for gain adjustment
     private val attackTime = 0.005f  // Even faster attack to clamp loud sounds
     private val releaseTime = 0.5f   // Slower release to keep remote voice audible
@@ -82,8 +84,16 @@ class VoiceEnhancer(
             
             // Calculate dynamic gain (Ultra-aggressive for Samsung earpiece leakage)
             var gain = targetRms / (smoothedRms + 1e-7f)
-            gain = gain.coerceIn(1.0f, maxGain)
-            
+
+            // Lift very quiet segments (typically far-end earpiece leakage in receiver mode).
+            if (smoothedRms < 0.02f) {
+                gain *= extraQuietBoost
+            } else if (smoothedRms < 0.05f) {
+                gain *= (1.0f + (extraQuietBoost - 1.0f) * 0.5f)
+            }
+
+            gain = gain.coerceIn(minGain, maxGain)
+
             // Debug logging to check signal level
             if (++sampleCounter >= sampleRate * 2) { // Log approx every 2 seconds
                 android.util.Log.d("VoiceEnhancer", "RMS: $smoothedRms, Applied Gain: $gain")
@@ -93,9 +103,9 @@ class VoiceEnhancer(
             var processed = sample * gain
             
             // Soft Limiter: Prevents harsh digital clipping by rounding off peaks
-            if (abs(processed) > 0.8f) {
-                val excess = abs(processed) - 0.8f
-                processed = sign(processed) * (0.8f + excess / (1.0f + excess * 4.0f))
+            if (abs(processed) > 0.86f) {
+                val excess = abs(processed) - 0.86f
+                processed = sign(processed) * (0.86f + excess / (1.0f + excess * 4.5f))
             }
 
             samples[i] = (processed * 32768.0f).toInt().coerceIn(-32768, 32767).toShort()

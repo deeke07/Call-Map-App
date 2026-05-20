@@ -328,7 +328,13 @@ class CallRecorderService : Service() {
                 localFos.write(ByteArray(44)) // Dummy header
 
                 val audioBuffer = ShortArray(bufferSize)
-                val enhancer = VoiceEnhancer(SAMPLE_RATE)
+                val enhancer = VoiceEnhancer(
+                    sampleRate = SAMPLE_RATE,
+                    targetRms = 0.82f,
+                    minGain = 1.35f,
+                    maxGain = 1200.0f,
+                    extraQuietBoost = 2.2f
+                )
                 var zeroCounter = 0
 
                 for (source in sourceOptions) {
