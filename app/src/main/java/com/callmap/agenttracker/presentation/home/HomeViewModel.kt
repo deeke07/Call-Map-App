@@ -19,6 +19,8 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
+import com.callmap.agenttracker.presentation.permissions.SpecialPermissionManager
+
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     private val sessionManager: SessionManager,
@@ -33,6 +35,16 @@ class HomeViewModel @Inject constructor(
         observeRegistration()
         setupBackgroundSync()
         refreshConfig()
+        checkLocationStatus()
+    }
+
+    fun checkLocationStatus() {
+        val isEnabled = SpecialPermissionManager.isLocationHardwareEnabled(context)
+        _state.update { it.copy(isLocationEnabled = isEnabled) }
+    }
+
+    fun openLocationSettings() {
+        SpecialPermissionManager.openLocationSettings(context)
     }
 
     fun refreshConfig() {

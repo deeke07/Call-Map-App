@@ -8,8 +8,11 @@ import com.callmap.agenttracker.data.local.dao.DeviceEventDao
 import com.callmap.agenttracker.data.local.dao.LocationDao
 import com.callmap.agenttracker.data.manager.AlarmScheduler
 import com.callmap.agenttracker.data.manager.AppInitializerImpl
+import com.callmap.agenttracker.data.manager.DataCleanupManager
+import com.callmap.agenttracker.data.manager.DeviceRestartDetector
 import com.callmap.agenttracker.data.manager.EventManagerImpl
 import com.callmap.agenttracker.data.manager.ServiceManagerImpl
+import com.callmap.agenttracker.data.manager.ServiceRestartManager
 import com.callmap.agenttracker.data.manager.SessionManagerImpl
 import com.callmap.agenttracker.data.manager.SyncManagerImpl
 import com.callmap.agenttracker.data.remote.api.AuthApi
@@ -178,13 +181,36 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideDataCleanupManager(
+        @ApplicationContext context: Context,
+        locationDao: LocationDao,
+        callLogDao: CallLogDao
+    ): DataCleanupManager {
+        return DataCleanupManager(context, locationDao, callLogDao)
+    }
+
+    @Provides
+    @Singleton
+    fun provideDeviceRestartDetector(@ApplicationContext context: Context): DeviceRestartDetector {
+        return DeviceRestartDetector(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideServiceRestartManager(@ApplicationContext context: Context): ServiceRestartManager {
+        return ServiceRestartManager(context)
+    }
+
+    @Provides
+    @Singleton
     fun provideLocationRepository(
         api: LocationApi,
         dao: LocationDao,
         sessionManager: SessionManager,
-        networkObserver: NetworkObserver
+        networkObserver: NetworkObserver,
+        cleanupManager: DataCleanupManager
     ): LocationRepository {
-        return LocationRepositoryImpl(api, dao, sessionManager, networkObserver)
+        return LocationRepositoryImpl(api, dao, sessionManager, networkObserver, cleanupManager)
     }
 
     @Provides
@@ -192,9 +218,10 @@ object AppModule {
     fun provideCallRepository(
         api: CallApi,
         dao: CallLogDao,
-        networkObserver: NetworkObserver
+        networkObserver: NetworkObserver,
+        cleanupManager: DataCleanupManager
     ): CallRepository {
-        return CallRepositoryImpl(api, dao, networkObserver)
+        return CallRepositoryImpl(api, dao, networkObserver, cleanupManager)
     }
 
     @Provides

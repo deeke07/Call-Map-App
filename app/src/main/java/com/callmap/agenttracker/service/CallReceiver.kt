@@ -6,6 +6,9 @@ import android.content.Intent
 import android.telephony.TelephonyManager
 import android.util.Log
 import android.os.Build
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import android.Manifest
 import androidx.annotation.RequiresApi
 import com.callmap.agenttracker.domain.manager.SessionManager
 import dagger.hilt.android.AndroidEntryPoint
@@ -21,9 +24,6 @@ class CallReceiver : BroadcastReceiver() {
 
     @Inject
     lateinit var sessionManager: SessionManager
-
-    @Inject
-    lateinit var serviceManager: com.callmap.agenttracker.domain.manager.ServiceManager
 
     companion object {
         private const val TAG = "CallReceiver"
@@ -64,9 +64,6 @@ class CallReceiver : BroadcastReceiver() {
                 val number = intent.getStringExtra(Intent.EXTRA_PHONE_NUMBER) ?: "Unknown"
                 Log.d(TAG, "Outgoing call initiated: $number")
 
-                // Trigger Watchdog check on outgoing call
-                serviceManager.runWatchdogCheck()
-
                 // Create new call data
                 currentCallData = CallData(
                     number = number,
@@ -96,9 +93,6 @@ class CallReceiver : BroadcastReceiver() {
                 }
 
                 if (incomingNumber != null && state == TelephonyManager.CALL_STATE_RINGING) {
-                    // Trigger Watchdog check on incoming call
-                    serviceManager.runWatchdogCheck()
-
                     // Incoming call ringing
                     val active = currentCallData
                     if (active != null && active.wasAnswered && !active.isSaved) {
@@ -196,6 +190,11 @@ class CallReceiver : BroadcastReceiver() {
 
     @RequiresApi(Build.VERSION_CODES.O)
     private fun startRecording(context: Context, callData: CallData, recordingEnabled: Boolean) {
+        if (!hasRequiredPermissions(context)) {
+            Log.e(TAG, "Missing required permissions to start recording service")
+            return
+        }
+
         val intent = Intent(context, CallRecorderService::class.java).apply {
             action = CallRecorderService.ACTION_START
             putExtra(CallRecorderService.EXTRA_NUMBER, callData.number)
@@ -203,7 +202,11 @@ class CallReceiver : BroadcastReceiver() {
             putExtra(CallRecorderService.EXTRA_START_TIME, callData.startTime)
             putExtra(CallRecorderService.EXTRA_RECORDING_ENABLED, recordingEnabled)
         }
-        context.startForegroundService(intent)
+        try {
+            context.startForegroundService(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start CallRecorderService for ACTION_START", e)
+        }
     }
 
     private fun stopRecording(context: Context, callData: CallData) {
@@ -233,10 +236,30 @@ class CallReceiver : BroadcastReceiver() {
             putExtra(CallRecorderService.EXTRA_META_DATA, callData.metaData)
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start CallRecorderService for ACTION_STOP", e)
+        }
+    }
+
+    private fun hasRequiredPermissions(context: Context): Boolean {
+        val permissions = mutableListOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.READ_CALL_LOG
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            permissions.add(Manifest.permission.FOREGROUND_SERVICE_MICROPHONE)
+        }
+
+        return permissions.all {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
         }
     }
 

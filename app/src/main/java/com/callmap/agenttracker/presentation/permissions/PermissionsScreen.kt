@@ -200,6 +200,15 @@ fun SpecialPermissionStep(onNext: () -> Unit) {
     var isLocationEnabled by remember {
         mutableStateOf(SpecialPermissionManager.isLocationHardwareEnabled(context))
     }
+    var isBackgroundLocationGranted by remember {
+        mutableStateOf(PermissionManager.isBackgroundLocationGranted(context))
+    }
+
+    val bgLocationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        isBackgroundLocationGranted = granted
+    }
 
     // Refresh state when returning to app
     DisposableEffect(lifecycleOwner) {
@@ -209,6 +218,7 @@ fun SpecialPermissionStep(onNext: () -> Unit) {
                 isBatteryOptimized = SpecialPermissionManager.isBatteryOptimizationIgnored(context)
                 isStorageManager = SpecialPermissionManager.isManageExternalStorageGranted(context)
                 isLocationEnabled = SpecialPermissionManager.isLocationHardwareEnabled(context)
+                isBackgroundLocationGranted = PermissionManager.isBackgroundLocationGranted(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -256,6 +266,18 @@ fun SpecialPermissionStep(onNext: () -> Unit) {
             onClick = { SpecialPermissionManager.openManageExternalStorageSettings(context) }
         )
 
+        Spacer(modifier = Modifier.height(12.dp))
+
+        PermissionItem(
+            title = "Background Location (Set to 'Allow all the time')",
+            isGranted = isBackgroundLocationGranted,
+            onClick = {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    bgLocationLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                }
+            }
+        )
+
         if (!isLocationEnabled) {
             Spacer(modifier = Modifier.height(12.dp))
             PermissionItem(
@@ -274,13 +296,14 @@ fun SpecialPermissionStep(onNext: () -> Unit) {
                 isBatteryOptimized = SpecialPermissionManager.isBatteryOptimizationIgnored(context)
                 isStorageManager = SpecialPermissionManager.isManageExternalStorageGranted(context)
                 isLocationEnabled = SpecialPermissionManager.isLocationHardwareEnabled(context)
+                isBackgroundLocationGranted = PermissionManager.isBackgroundLocationGranted(context)
             },
             modifier = Modifier.align(Alignment.CenterHorizontally)
         ) {
             Text("Refresh Status")
         }
 
-        val allGranted = isAccessibilityEnabled && isBatteryOptimized && isStorageManager && isLocationEnabled
+        val allGranted = isAccessibilityEnabled && isBatteryOptimized && isStorageManager && isLocationEnabled && isBackgroundLocationGranted
         Button(
             onClick = onNext,
             modifier = Modifier.fillMaxWidth().height(56.dp),

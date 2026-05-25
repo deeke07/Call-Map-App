@@ -44,9 +44,12 @@ class DeviceStateWorker @AssistedInject constructor(
         Log.d(TAG, "Executing single state check...")
         
         try {
+            // Heartbeat disabled to prevent 422 API errors
+            // eventRepository.logEvent(EventManager.HEARTBEAT)
+
             checkAllStates()
             
-            // Immediately sync any changes detected (permissions, SIM, hardware)
+            // Immediately sync any changes detected (permissions, SIM, hardware, heartbeat)
             eventRepository.syncPendingEvents()
             
             // Schedule the NEXT check in 2 minutes
@@ -59,54 +62,18 @@ class DeviceStateWorker @AssistedInject constructor(
         }
     }
 
-    private fun scheduleNextCheck(context: Context) {
-        val nextRequest = OneTimeWorkRequestBuilder<DeviceStateWorker>()
-            .setInitialDelay(POLL_INTERVAL_MINUTES, TimeUnit.MINUTES)
-            .addTag("DeviceState_Polling")
-            .build()
-
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            "DeviceStateCheck_Recursive",
-            ExistingWorkPolicy.APPEND,
-            nextRequest
-        )
-    }
-
-    private suspend fun checkAllStates() {
-        checkPermissions()
-        checkLocationHardware()
-        checkBatteryOptimization()
-        checkBackgroundRestriction()
-        checkNetworkState()
-        checkSimState()
-        checkLocationService()
-    }
-
-    private suspend fun checkLocationService() {
-        val registration = stateManager.sessionManager.getRegistration().first()
-        val isTrackingEnabled = registration?.trackingEnabled == true
-        val shouldBeTracking = shouldTrackLocationUseCase(System.currentTimeMillis(), registration)
-        val isRunning = serviceManager.isServiceRunning(LocationService::class.java)
-
-        if (isTrackingEnabled && shouldBeTracking && !isRunning) {
-            Log.w(TAG, "Location tracking service is STOPPED but should be RUNNING. Logging event.")
-            eventRepository.logEvent(
-                EventManager.LOCATION_TRACKING_STOPPED,
-                metadata = mapOf("reason" to "unexpectedly_stopped_detected_by_worker")
-            )
-            // Trigger watchdog to attempt self-healing
-            serviceManager.runWatchdogCheck()
-        }
-    }
-
     private suspend fun checkPermissions() {
-        val permissions = listOf(
+        val permissions = mutableListOf(
             Manifest.permission.RECORD_AUDIO to "RECORD_AUDIO",
             Manifest.permission.ACCESS_FINE_LOCATION to "LOCATION",
             Manifest.permission.READ_PHONE_STATE to "PHONE_STATE",
             Manifest.permission.READ_CALL_LOG to "CALL_LOG",
             Manifest.permission.READ_CONTACTS to "CONTACTS"
         )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            permissions.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION to "BACKGROUND_LOCATION")
+        }
 
         permissions.forEach { (perm, name) ->
             val isGranted = ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
@@ -182,6 +149,28 @@ class DeviceStateWorker @AssistedInject constructor(
             isEnabled = isOnline,
             enabledEvent = EventManager.DEVICE_ONLINE,
             disabledEvent = EventManager.DEVICE_OFFLINE
+        )
+    }
+
+    private suspend fun checkAllStates() {
+        checkPermissions()
+        checkLocationHardware()
+        checkBatteryOptimization()
+        checkBackgroundRestriction()
+        checkNetworkState()
+        checkSimState()
+    }
+
+    private fun scheduleNextCheck(context: Context) {
+        val workRequest = OneTimeWorkRequestBuilder<DeviceStateWorker>()
+            .setInitialDelay(POLL_INTERVAL_MINUTES, TimeUnit.MINUTES)
+            .setConstraints(Constraints.NONE) // Heartbeat should run even if low battery/no net (it will queue)
+            .build()
+
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "DeviceStateWorker_Periodic",
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            workRequest
         )
     }
 

@@ -40,7 +40,7 @@ class DeviceStateReceiver : BroadcastReceiver() {
         scope.launch {
             try {
                 when (intent.action) {
-                    Intent.ACTION_BOOT_COMPLETED, "android.intent.action.QUICKBOOT_POWERON" -> {
+                    Intent.ACTION_BOOT_COMPLETED, "android.intent.action.QUICKBOOT_POWERON", Intent.ACTION_LOCKED_BOOT_COMPLETED -> {
                         Log.i("DeviceStateReceiver", "Device Rebooted. Logging and Initializing...")
                         
                         // 1. Log the event directly to Room

@@ -4,6 +4,7 @@ import android.util.Log
 import com.callmap.agenttracker.data.local.dao.LocationDao
 import com.callmap.agenttracker.data.local.entity.LocationEntity
 import com.callmap.agenttracker.data.local.entity.SyncStatus
+import com.callmap.agenttracker.data.manager.DataCleanupManager
 import com.callmap.agenttracker.data.remote.api.LocationApi
 import com.callmap.agenttracker.data.remote.dto.BulkLocationRequest
 import com.callmap.agenttracker.data.remote.dto.LocationItem
@@ -21,7 +22,8 @@ class LocationRepositoryImpl @Inject constructor(
     private val api: LocationApi,
     private val dao: LocationDao,
     private val sessionManager: SessionManager,
-    private val networkObserver: NetworkObserver
+    private val networkObserver: NetworkObserver,
+    private val cleanupManager: DataCleanupManager
 ) : LocationRepository {
 
     private val syncMutex = Mutex()
@@ -94,6 +96,8 @@ class LocationRepositoryImpl @Inject constructor(
                 
                 if (totalSynced > 0) {
                     Log.i(TAG, "Sync Complete: Total $totalSynced locations.")
+                    // Cleanup synced records after successful sync
+                    cleanupManager.cleanupSyncedLocations()
                 }
                 Resource.Success(totalSynced)
             }

@@ -28,7 +28,16 @@ object PermissionManager {
         return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     }
 
+    fun isBackgroundLocationGranted(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            isPermissionGranted(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        } else {
+            true
+        }
+    }
+
     fun areAllPermissionsGranted(context: Context, permissions: List<String>): Boolean {
-        return permissions.all { isPermissionGranted(context, it) }
+        val baseGranted = permissions.all { isPermissionGranted(context, it) }
+        return baseGranted && isBackgroundLocationGranted(context)
     }
 }

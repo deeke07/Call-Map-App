@@ -4,6 +4,7 @@ import android.util.Log
 import com.callmap.agenttracker.data.local.dao.CallLogDao
 import com.callmap.agenttracker.data.local.entity.CallLogEntity
 import com.callmap.agenttracker.data.local.entity.SyncStatus
+import com.callmap.agenttracker.data.manager.DataCleanupManager
 import com.callmap.agenttracker.data.remote.api.CallApi
 import com.callmap.agenttracker.domain.repository.CallRepository
 import com.callmap.agenttracker.util.file.FileUtils
@@ -21,7 +22,8 @@ import javax.inject.Inject
 class CallRepositoryImpl @Inject constructor(
     private val api: CallApi,
     private val dao: CallLogDao,
-    private val networkObserver: com.callmap.agenttracker.util.NetworkObserver
+    private val networkObserver: com.callmap.agenttracker.util.NetworkObserver,
+    private val cleanupManager: DataCleanupManager
 ) : CallRepository {
 
     private val syncMutex = Mutex()
@@ -194,6 +196,9 @@ class CallRepositoryImpl @Inject constructor(
                 if (someFailed) {
                     Result.failure(Exception("One or more call uploads failed; will retry"))
                 } else {
+                    // Cleanup synced call logs after successful sync
+                    cleanupManager.cleanupSyncedCallLogs()
+                    cleanupManager.cleanupOrphanRecordings()
                     Result.success(Unit)
                 }
             }

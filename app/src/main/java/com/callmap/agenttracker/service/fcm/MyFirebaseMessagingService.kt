@@ -47,7 +47,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         super.onMessageReceived(message)
         Log.i("FCM", "Message received! Data payload: ${message.data}")
 
-        // Heartbeat/Watchdog: App is alive via FCM
+        // Watchdog check ensures services are running when an FCM message arrives
         serviceManager.runWatchdogCheck()
 
         val type = message.data["type"]

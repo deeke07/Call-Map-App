@@ -22,5 +22,6 @@ interface EventManager {
         const val BATTERY_OPTIMIZATION_ENABLED = "BATTERY_OPTIMIZATION_ENABLED"
         const val SIM_CHANGED = "SIM_CHANGED"
         const val LOCATION_TRACKING_STOPPED = "LOCATION_TRACKING_STOPPED"
+        const val HEARTBEAT = "HEARTBEAT"
     }
 }
