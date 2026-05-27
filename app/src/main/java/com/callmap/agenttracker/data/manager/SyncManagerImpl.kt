@@ -115,4 +115,10 @@ class SyncManagerImpl @Inject constructor(
             }
         }
     }
+
+    override fun cancelAllSync() {
+        Log.w("SyncManager", "Cancelling all background sync jobs")
+        WorkManager.getInstance(context).cancelAllWork()
+        alarmScheduler.cancelAllAlarms()
+    }
 }

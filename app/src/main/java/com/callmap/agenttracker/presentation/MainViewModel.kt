@@ -22,12 +22,24 @@ class MainViewModel @Inject constructor(
     private val _startDestination = MutableStateFlow<String?>(null)
     val startDestination: StateFlow<String?> = _startDestination
 
+    init {
+        observeSession()
+    }
+
+    private fun observeSession() {
+        viewModelScope.launch {
+            sessionManager.getRegistration().collect { registration ->
+                if (registration == null) {
+                    _startDestination.value = "register"
+                }
+            }
+        }
+    }
+
     fun checkState(context: Context) {
         viewModelScope.launch {
             val registration = sessionManager.getRegistration().first()
-            if (registration == null) {
-                _startDestination.value = "register"
-            } else {
+            if (registration != null) {
                 val runtimeGranted = PermissionManager.areAllPermissionsGranted(context, PermissionManager.runtimePermissions)
                 val accessibilityEnabled = SpecialPermissionManager.isAccessibilityServiceEnabled(context, MyAccessibilityService::class.java)
                 val batteryIgnored = SpecialPermissionManager.isBatteryOptimizationIgnored(context)

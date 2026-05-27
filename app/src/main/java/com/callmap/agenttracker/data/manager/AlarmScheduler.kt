@@ -61,7 +61,7 @@ class AlarmScheduler @Inject constructor(
         )
     }
 
-    fun cancelAlarm() {
+    fun cancelAllAlarms() {
         val intent = Intent(context, ScheduleReceiver::class.java)
         val pendingIntent = PendingIntent.getBroadcast(
             context,
@@ -71,6 +71,7 @@ class AlarmScheduler @Inject constructor(
         )
         if (pendingIntent != null) {
             alarmManager.cancel(pendingIntent)
+            pendingIntent.cancel()
         }
     }
 }

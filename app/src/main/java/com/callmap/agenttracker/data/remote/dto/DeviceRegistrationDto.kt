@@ -50,5 +50,7 @@ data class DeviceSettingsDto(
     @SerializedName("location_high_accuracy") val locationHighAccuracy: Boolean?,
     @SerializedName("tracking_days") val trackingDays: List<String>?,
     @SerializedName("tracking_start_time") val trackingStartTime: String?,
-    @SerializedName("tracking_end_time") val trackingEndTime: String?
+    @SerializedName("tracking_end_time") val trackingEndTime: String?,
+    @SerializedName("monitor_internet_status") val monitorInternetStatus: Boolean?,
+    @SerializedName("device_status") val deviceStatus: Boolean?
 )

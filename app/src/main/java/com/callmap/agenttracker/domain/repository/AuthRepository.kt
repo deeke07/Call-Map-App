@@ -6,4 +6,5 @@ import com.callmap.agenttracker.util.Resource
 
 interface AuthRepository {
     suspend fun registerDevice(request: DeviceRegistrationRequest): Resource<RegistrationResult>
+    suspend fun markDeviceOffline(deviceUuid: String): Resource<Unit>
 }

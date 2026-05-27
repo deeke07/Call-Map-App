@@ -15,10 +15,19 @@ import retrofit2.http.Part
 interface CallApi {
 
     @Headers("Accept: application/json")
+    @POST("public/device-sims/bulk")
+    suspend fun registerDeviceSims(
+        @Body request: com.callmap.agenttracker.data.remote.dto.DeviceSimBulkRequest
+    ): Response<com.callmap.agenttracker.data.remote.dto.DeviceSimBulkResponse>
+
+    @Headers("Accept: application/json")
     @Multipart
     @POST("public/calls")
     suspend fun submitCallLog(
         @Part("device_uuid") deviceUuid: RequestBody,
+        @Part("device_sim_uuid") deviceSimUuid: RequestBody?,
+        @Part("sim_slot") simSlot: RequestBody?,
+        @Part("carrier_name") carrierName: RequestBody?,
         @Part("client_number") clientNumber: RequestBody,
         @Part("call_type") callType: RequestBody,
         @Part("call_duration") callDuration: RequestBody,

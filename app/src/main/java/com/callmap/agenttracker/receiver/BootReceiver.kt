@@ -26,7 +26,7 @@ class BootReceiver : BroadcastReceiver() {
     lateinit var restartDetector: DeviceRestartDetector
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == Intent.ACTION_BOOT_COMPLETED || intent.action == Intent.ACTION_LOCKED_BOOT_COMPLETED) {
+        if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
             Log.i("BootReceiver", "Device boot completed detected")
 
             // Run in background to avoid ANR

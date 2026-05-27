@@ -25,6 +25,7 @@ import com.callmap.agenttracker.presentation.permissions.SpecialPermissionManage
 class HomeViewModel @Inject constructor(
     private val sessionManager: SessionManager,
     private val fetchConfigUseCase: com.callmap.agenttracker.domain.usecase.FetchConfigUseCase,
+    private val deviceSimManager: com.callmap.agenttracker.domain.manager.DeviceSimManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -36,6 +37,17 @@ class HomeViewModel @Inject constructor(
         setupBackgroundSync()
         refreshConfig()
         checkLocationStatus()
+        syncSims()
+    }
+
+    private fun syncSims() {
+        viewModelScope.launch {
+            try {
+                deviceSimManager.syncSimsWithBackend()
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "Error syncing SIMs", e)
+            }
+        }
     }
 
     fun checkLocationStatus() {

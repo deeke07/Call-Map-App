@@ -158,7 +158,6 @@ class DeviceStateWorker @AssistedInject constructor(
         checkBatteryOptimization()
         checkBackgroundRestriction()
         checkNetworkState()
-        checkSimState()
     }
 
     private fun scheduleNextCheck(context: Context) {
@@ -174,18 +173,5 @@ class DeviceStateWorker @AssistedInject constructor(
         )
     }
 
-    private suspend fun checkSimState() {
-        val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-        val currentSim = try {
-            tm.simSerialNumber ?: tm.simOperator ?: "unknown"
-        } catch (e: Exception) {
-            "restricted"
-        }
-        
-        stateManager.trackValueState(
-            stateKey = "sim_id",
-            currentValue = currentSim,
-            eventType = EventManager.SIM_CHANGED
-        )
-    }
+
 }

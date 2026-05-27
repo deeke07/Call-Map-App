@@ -21,6 +21,12 @@ interface AuthApi {
         @Body request: Map<String, String>
     ): Response<DeviceRegistrationResponse>
 
+    @POST("public/device/offline")
+    @Headers("Accept: application/json")
+    suspend fun markDeviceOffline(
+        @Body request: Map<String, String>
+    ): Response<Map<String, Any>>
+
     companion object {
         const val BASE_URL = "https://callmap.solz.cloud/api/"
     }

@@ -3,6 +3,7 @@ package com.callmap.agenttracker.data.manager
 import android.content.Context
 import android.util.Log
 import com.callmap.agenttracker.domain.manager.AppInitializer
+import com.callmap.agenttracker.domain.manager.DeviceSimManager
 import com.callmap.agenttracker.domain.manager.ServiceManager
 import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.manager.SyncManager
@@ -23,6 +24,7 @@ class AppInitializerImpl @Inject constructor(
     private val syncManager: SyncManager,
     private val serviceManager: ServiceManager,
     private val sessionManager: SessionManager,
+    private val deviceSimManager: DeviceSimManager,
     private val callRepository: CallRepository,
     private val shouldTrackLocationUseCase: ShouldTrackLocationUseCase
 ) : AppInitializer {

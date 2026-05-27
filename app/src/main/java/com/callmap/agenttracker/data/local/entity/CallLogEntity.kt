@@ -27,5 +27,8 @@ data class CallLogEntity(
     val longitude: String? = null,
     val batteryLevel: String? = null,
     val metaData: String? = null,
+    val deviceSimUuid: String? = null,
+    val simSlot: Int? = null,
+    val carrierName: String? = null,
     val retryCount: Int = 0
 )

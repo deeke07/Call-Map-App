@@ -57,7 +57,7 @@ class LocationService : Service() {
         private const val CHANNEL_ID = "location_tracking_v4"
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
-        
+
         // Threshold for switching from Loop to Alarm-based tracking (10 minutes)
         // Intervals below this stay in a resident loop reinforced by Alarms
         private const val LONG_INTERVAL_THRESHOLD_MS = 10 * 60 * 1000L
@@ -66,10 +66,10 @@ class LocationService : Service() {
     override fun onCreate() {
         super.onCreate()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
-        
+
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LocationService::WakeLock")
-        
+
         createNotificationChannel()
     }
 
@@ -91,7 +91,7 @@ class LocationService : Service() {
         if (wakeLock?.isHeld == false) wakeLock?.acquire(10000L)
 
         val notification = createNotification()
-        
+
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 // On Android 14+ (API 34), this requires FOREGROUND_SERVICE_LOCATION in manifest.
@@ -104,21 +104,21 @@ class LocationService : Service() {
                 if (Build.VERSION.SDK_INT >= 34 && !hasBgLocation) {
                     Log.w(TAG, "Starting Location FGS without Background Location permission. This may fail on some devices.")
                 }
-                
+
                 startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
             } else {
                 startForeground(NOTIFICATION_ID, notification)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Critical: Failed to start Foreground Service. Error: ${e.message}")
-            
+
             // If we are on Android 14+ and it failed, it's likely due to background start restrictions.
             // We attempt to stop the service to prevent repeated crashes.
             if (Build.VERSION.SDK_INT >= 34) {
                 stopTracking(startId)
                 return
             }
-            
+
             // Fallback for older versions
             try {
                 startForeground(NOTIFICATION_ID, notification)
@@ -174,13 +174,13 @@ class LocationService : Service() {
 
         if (shouldTrackLocationUseCase(now, registration)) {
             Log.i(TAG, "Executing Alarm-based tracking fix...")
-            
+
             // 1. Schedule next wake-up IMMEDIATELY to ensure continuity
             scheduleNextAlarm(intervalMs)
-            
+
             // 2. Fetch the current location
             fetchAndProcessLocation()
-            
+
             // 3. Important: Stop the service to allow the system to enter low-power state
             // It will be restarted by the AlarmManager in 3 minutes.
             Log.d(TAG, "Tracking cycle complete. Releasing resources until next alarm.")
@@ -203,7 +203,7 @@ class LocationService : Service() {
                 // Schedule alarm as a "Doze-piercing" watchdog for the next iteration (with 30s grace period)
                 // This prevents the alarm from firing and interrupting the active loop when healthy
                 scheduleNextAlarm(intervalMs + 30000L)
-                
+
                 fetchAndProcessLocation()
 
                 val fetchDuration = System.currentTimeMillis() - cycleStartTime
@@ -221,15 +221,15 @@ class LocationService : Service() {
     private suspend fun fetchAndProcessLocation() {
         val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
         val fetchLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LocationService::FetchLock")
-        fetchLock.acquire(60000L) 
-        
+        fetchLock.acquire(60000L)
+
         try {
             val cts = CancellationTokenSource()
             Log.d(TAG, "Requesting fresh location fix...")
-            
+
             var location = withTimeoutOrNull(45000L) {
                 fusedLocationClient.getCurrentLocation(
-                    Priority.PRIORITY_HIGH_ACCURACY, 
+                    Priority.PRIORITY_HIGH_ACCURACY,
                     cts.token
                 ).await()
             }
@@ -255,19 +255,19 @@ class LocationService : Service() {
 
     private fun scheduleNextAlarm(delayMs: Long) {
         val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        
+
         // Target ScheduleReceiver for better wake reliability
         val intent = Intent(this, ScheduleReceiver::class.java).apply {
             action = ScheduleReceiver.ACTION_LOCATION_ALARM
         }
-        
+
         val pendingIntent = PendingIntent.getBroadcast(
-            this, 1001, intent, 
+            this, 1001, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
         val triggerAt = System.currentTimeMillis() + delayMs
-        
+
         // Use setExactAndAllowWhileIdle for Doze mode penetration if permitted (Android 12+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
             Log.w(TAG, "Missing exact alarm permission. Using inexact fallback.")

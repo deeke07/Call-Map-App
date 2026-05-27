@@ -25,6 +25,8 @@ import com.callmap.agenttracker.data.repository.LocationRepositoryImpl
 import com.callmap.agenttracker.domain.manager.AppInitializer
 import com.callmap.agenttracker.domain.manager.EventManager
 import com.callmap.agenttracker.domain.manager.ServiceManager
+import com.callmap.agenttracker.data.manager.DeviceSimManagerImpl
+import com.callmap.agenttracker.domain.manager.DeviceSimManager
 import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.manager.SyncManager
 import com.callmap.agenttracker.domain.repository.AuthRepository
@@ -158,15 +160,26 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideDeviceSimManager(
+        @ApplicationContext context: Context,
+        api: CallApi,
+        sessionManager: SessionManager
+    ): DeviceSimManager {
+        return DeviceSimManagerImpl(context, api, sessionManager)
+    }
+
+    @Provides
+    @Singleton
     fun provideAppInitializer(
         @ApplicationContext context: Context,
         syncManager: SyncManager,
         serviceManager: ServiceManager,
         sessionManager: SessionManager,
+        deviceSimManager: DeviceSimManager,
         callRepository: CallRepository,
         shouldTrackLocationUseCase: ShouldTrackLocationUseCase
     ): AppInitializer {
-        return AppInitializerImpl(context, syncManager, serviceManager, sessionManager, callRepository, shouldTrackLocationUseCase)
+        return AppInitializerImpl(context, syncManager, serviceManager, sessionManager, deviceSimManager, callRepository, shouldTrackLocationUseCase)
     }
 
     @Provides
@@ -174,9 +187,10 @@ object AppModule {
     fun provideAuthRepository(
         api: AuthApi,
         sessionManager: SessionManager,
+        deviceSimManager: DeviceSimManager,
         gson: Gson
     ): AuthRepository {
-        return AuthRepositoryImpl(api, sessionManager, gson)
+        return AuthRepositoryImpl(api, sessionManager, deviceSimManager, gson)
     }
 
     @Provides

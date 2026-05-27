@@ -35,6 +35,12 @@ class DeviceStateManager @Inject constructor(
         permissionName: String? = null 
     ) = withContext(Dispatchers.IO) {
         try {
+            val registration = sessionManager.getRegistration().first()
+            val monitorInternetStatus = registration?.monitorInternetStatus ?: false
+
+            // Filter network status events based on monitor_internet_status flag
+            val skipEvent = (enabledEvent == EventManager.DEVICE_ONLINE || disabledEvent == EventManager.DEVICE_OFFLINE) && !monitorInternetStatus
+
             val storageKey = if (permissionName != null) "${stateKey}_$permissionName" else stateKey
             val states = sessionManager.getDeviceStates().first()
             val currentVal = states[storageKey] ?: "false"
@@ -43,14 +49,18 @@ class DeviceStateManager @Inject constructor(
             if (currentState != isEnabled) {
                 sessionManager.updateDeviceState(storageKey, isEnabled.toString())
                 
-                val eventToLog = if (isEnabled) enabledEvent else disabledEvent
-                eventToLog?.let {
-                    Log.i("DeviceStateManager", "Transition: $storageKey -> $isEnabled")
-                    // Use EventManager to handle the specific metadata structure required by the backend
-                    eventManager.logEvent(
-                        eventType = it,
-                        permissionName = permissionName
-                    )
+                if (!skipEvent) {
+                    val eventToLog = if (isEnabled) enabledEvent else disabledEvent
+                    eventToLog?.let {
+                        Log.i("DeviceStateManager", "Transition: $storageKey -> $isEnabled")
+                        // Use EventManager to handle the specific metadata structure required by the backend
+                        eventManager.logEvent(
+                            eventType = it,
+                            permissionName = permissionName
+                        )
+                    }
+                } else {
+                    Log.d("DeviceStateManager", "Skipping event $enabledEvent/$disabledEvent because monitor_internet_status is false")
                 }
             }
         } catch (e: Exception) {

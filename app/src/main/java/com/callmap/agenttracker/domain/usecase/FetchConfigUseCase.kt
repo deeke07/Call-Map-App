@@ -11,7 +11,8 @@ import javax.inject.Inject
 class FetchConfigUseCase @Inject constructor(
     private val authApi: AuthApi,
     private val sessionManager: SessionManager,
-    private val syncManager: SyncManager
+    private val syncManager: SyncManager,
+    private val logoutUseCase: LogoutUseCase
 ) {
     suspend operator fun invoke() {
         Log.i("FetchConfigUseCase", "Fetching configuration...")
@@ -37,8 +38,18 @@ class FetchConfigUseCase @Inject constructor(
                         remoteLock = settings?.remoteLock ?: currentRegistration.remoteLock,
                         trackingDays = settings?.trackingDays ?: currentRegistration.trackingDays,
                         trackingStartTime = settings?.trackingStartTime ?: currentRegistration.trackingStartTime,
-                        trackingEndTime = settings?.trackingEndTime ?: currentRegistration.trackingEndTime
+                        trackingEndTime = settings?.trackingEndTime ?: currentRegistration.trackingEndTime,
+                        monitorInternetStatus = settings?.monitorInternetStatus ?: currentRegistration.monitorInternetStatus,
+                        deviceStatus = settings?.deviceStatus ?: currentRegistration.deviceStatus
                     )
+
+                    // Critical: Check if device is disabled
+                    if (!updatedRegistration.deviceStatus) {
+                        Log.w("FetchConfigUseCase", "Device status is FALSE. Triggering emergency logout.")
+                        logoutUseCase()
+                        return
+                    }
+
                     sessionManager.saveRegistration(updatedRegistration)
                     Log.i("FetchConfigUseCase", "Config updated: $updatedRegistration")
                     syncManager.scheduleTrackingAudit()

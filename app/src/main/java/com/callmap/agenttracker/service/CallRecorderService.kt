@@ -26,6 +26,7 @@ import androidx.work.WorkManager
 import com.callmap.agenttracker.data.local.entity.CallLogEntity
 import com.callmap.agenttracker.data.local.entity.SyncStatus
 import com.callmap.agenttracker.data.worker.CallSyncWorker
+import com.callmap.agenttracker.domain.manager.DeviceSimManager
 import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.repository.CallRepository
 import com.callmap.agenttracker.util.audio.VoiceEnhancer
@@ -55,6 +56,9 @@ class CallRecorderService : Service() {
 
     @Inject
     lateinit var sessionManager: SessionManager
+
+    @Inject
+    lateinit var deviceSimManager: DeviceSimManager
 
     @Inject
     lateinit var networkObserver: com.callmap.agenttracker.util.NetworkObserver
@@ -507,6 +511,12 @@ class CallRecorderService : Service() {
 
         val uniqueId = FileUtils.generateUniqueId(registration.deviceUuid, startStr, endStr, finalNumber, finalType)
 
+        // Fetch SIM details for this call
+        // Even if callLogDetails or subId is null, we try to resolve it (e.g. fallback for single-SIM devices)
+        val simSlot = deviceSimManager.getSimSlotFromSubscriptionId(callLogDetails?.subId)
+        val deviceSimUuid = simSlot?.let { deviceSimManager.getSimUuidForSlot(it) }
+        val carrierName = simSlot?.let { deviceSimManager.getCarrierNameForSlot(it) }
+
         if (!callRepository.exists(uniqueId)) {
             val callLog = CallLogEntity(
                 uniqueId = uniqueId,
@@ -529,6 +539,9 @@ class CallRecorderService : Service() {
                 apkVersion = apkVersion,
                 spotSettingVersion = null,
                 metaData = metaData,
+                deviceSimUuid = deviceSimUuid,
+                simSlot = simSlot,
+                carrierName = carrierName,
                 retryCount = 0
             )
             callRepository.saveCallLog(callLog)
@@ -578,8 +591,10 @@ class CallRecorderService : Service() {
                     CallLog.Calls.DATE,
                     CallLog.Calls.DURATION,
                     CallLog.Calls.TYPE,
-                    CallLog.Calls.CACHED_NAME
+                    CallLog.Calls.CACHED_NAME,
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) CallLog.Calls.PHONE_ACCOUNT_ID else CallLog.Calls.NUMBER
                 )
+                
                 val timeWindow = 15_000L // Increased window for better matching
                 val selection = "${CallLog.Calls.DATE} >= ? AND ${CallLog.Calls.DATE} <= ?"
                 val selectionArgs = arrayOf(
@@ -602,6 +617,9 @@ class CallRecorderService : Service() {
                         val logDuration = cursor.getLong(cursor.getColumnIndexOrThrow(CallLog.Calls.DURATION))
                         val type = cursor.getInt(cursor.getColumnIndexOrThrow(CallLog.Calls.TYPE))
                         val name = cursor.getString(cursor.getColumnIndexOrThrow(CallLog.Calls.CACHED_NAME)) ?: getContactName(logNumber)
+                        val subId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            cursor.getString(cursor.getColumnIndexOrThrow(CallLog.Calls.PHONE_ACCOUNT_ID))
+                        } else null
 
                         val isTypeMatch = if (targetType == CallLog.Calls.INCOMING_TYPE) {
                             type == CallLog.Calls.INCOMING_TYPE ||
@@ -622,7 +640,7 @@ class CallRecorderService : Service() {
                         }
 
                         if (isMatch) {
-                            candidates.add(SystemCallLogInfo(logNumber, name, logDuration, type, logStart))
+                            candidates.add(SystemCallLogInfo(logNumber, name, logDuration, type, logStart, subId))
                         }
                     }
                 }
@@ -641,7 +659,7 @@ class CallRecorderService : Service() {
         return null
     }
 
-    private data class SystemCallLogInfo(val number: String?, val name: String?, val duration: Long, val type: Int, val timestamp: Long)
+    private data class SystemCallLogInfo(val number: String?, val name: String?, val duration: Long, val type: Int, val timestamp: Long, val subId: String?)
 
     private fun normalizeNumber(number: String?): String {
         return number?.filter { it.isDigit() }?.takeLast(10) ?: ""

@@ -15,5 +15,7 @@ data class RegistrationResult(
     val lastSimId: String? = null,
     val trackingDays: List<String> = emptyList(),
     val trackingStartTime: String? = null,
-    val trackingEndTime: String? = null
+    val trackingEndTime: String? = null,
+    val monitorInternetStatus: Boolean = false,
+    val deviceStatus: Boolean = true
 )

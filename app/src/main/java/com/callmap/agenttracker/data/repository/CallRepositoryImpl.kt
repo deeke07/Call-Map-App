@@ -52,6 +52,9 @@ class CallRepositoryImpl @Inject constructor(
             val apiModel = com.callmap.agenttracker.data.mapper.CallMapper.mapCallToApiModel(callLog)
 
             val deviceUuid = callLog.deviceUuid.toRequestBody("text/plain".toMediaTypeOrNull())
+            val deviceSimUuid = callLog.deviceSimUuid?.toRequestBody("text/plain".toMediaTypeOrNull())
+            val simSlot = callLog.simSlot?.toString()?.toRequestBody("text/plain".toMediaTypeOrNull())
+            val carrierName = callLog.carrierName?.toRequestBody("text/plain".toMediaTypeOrNull())
             val clientNumber = callLog.clientNumber.toRequestBody("text/plain".toMediaTypeOrNull())
             val callType = apiModel.call_type.toRequestBody("text/plain".toMediaTypeOrNull())
             val callDuration = apiModel.call_duration.toString().toRequestBody("text/plain".toMediaTypeOrNull())
@@ -88,7 +91,7 @@ class CallRepositoryImpl @Inject constructor(
             }
 
             val response = api.submitCallLog(
-                deviceUuid, clientNumber, callType, callDuration, callStartedAt, callEndedAt,
+                deviceUuid, deviceSimUuid, simSlot, carrierName, clientNumber, callType, callDuration, callStartedAt, callEndedAt,
                 callAnsweredAt, callerName, durationMismatch, wasOnHold, interruptedNumbers,
                 spotSettingVersion, apkVersion, latitude, longitude, batteryLevel, metaData, recordingPart
             )

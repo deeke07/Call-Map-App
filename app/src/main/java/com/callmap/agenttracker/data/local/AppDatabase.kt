@@ -10,7 +10,7 @@ import com.callmap.agenttracker.data.local.entity.CallLogEntity
 import com.callmap.agenttracker.data.local.entity.DeviceEventEntity
 import com.callmap.agenttracker.data.local.entity.LocationEntity
 
-@Database(entities = [LocationEntity::class, CallLogEntity::class, DeviceEventEntity::class], version = 6, exportSchema = false)
+@Database(entities = [LocationEntity::class, CallLogEntity::class, DeviceEventEntity::class], version = 7, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun locationDao(): LocationDao

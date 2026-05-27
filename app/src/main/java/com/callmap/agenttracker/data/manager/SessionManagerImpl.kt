@@ -7,6 +7,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.model.RegistrationResult
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -34,6 +35,8 @@ class SessionManagerImpl @Inject constructor(
         private val TRACKING_DAYS = stringSetPreferencesKey("tracking_days")
         private val TRACKING_START_TIME = stringPreferencesKey("tracking_start_time")
         private val TRACKING_END_TIME = stringPreferencesKey("tracking_end_time")
+        private val MONITOR_INTERNET_STATUS = booleanPreferencesKey("monitor_internet_status")
+        private val DEVICE_STATUS = booleanPreferencesKey("device_status")
         
         // Dynamic State Keys Prefix
         private const val STATE_PREFIX = "state_"
@@ -56,6 +59,8 @@ class SessionManagerImpl @Inject constructor(
             prefs[TRACKING_DAYS] = registration.trackingDays.toSet()
             prefs[TRACKING_START_TIME] = registration.trackingStartTime ?: ""
             prefs[TRACKING_END_TIME] = registration.trackingEndTime ?: ""
+            prefs[MONITOR_INTERNET_STATUS] = registration.monitorInternetStatus
+            prefs[DEVICE_STATUS] = registration.deviceStatus
         }
     }
 
@@ -77,7 +82,9 @@ class SessionManagerImpl @Inject constructor(
                 lastSimId = prefs[LAST_SIM_ID],
                 trackingDays = prefs[TRACKING_DAYS]?.toList() ?: emptyList(),
                 trackingStartTime = prefs[TRACKING_START_TIME]?.ifEmpty { null },
-                trackingEndTime = prefs[TRACKING_END_TIME]?.ifEmpty { null }
+                trackingEndTime = prefs[TRACKING_END_TIME]?.ifEmpty { null },
+                monitorInternetStatus = prefs[MONITOR_INTERNET_STATUS] ?: false,
+                deviceStatus = prefs[DEVICE_STATUS] ?: true
             )
         }
     }
@@ -100,5 +107,27 @@ class SessionManagerImpl @Inject constructor(
         context.dataStore.edit { prefs ->
             prefs[prefKey] = value
         }
+    }
+
+    override suspend fun saveSimUuid(simSlot: Int, uuid: String) {
+        val key = stringPreferencesKey("sim_uuid_$simSlot")
+        context.dataStore.edit { prefs ->
+            prefs[key] = uuid
+        }
+    }
+
+    override suspend fun getSimUuid(simSlot: Int): String? {
+        val key = stringPreferencesKey("sim_uuid_$simSlot")
+        return context.dataStore.data.map { it[key] }.firstOrNull()
+    }
+
+    override suspend fun saveSimSubIdMapping(subId: String, simSlot: Int) {
+        val key = stringPreferencesKey("sub_mapping_$subId")
+        context.dataStore.edit { it[key] = simSlot.toString() }
+    }
+
+    override suspend fun getSlotFromSubIdMapping(subId: String): Int? {
+        val key = stringPreferencesKey("sub_mapping_$subId")
+        return context.dataStore.data.map { it[key]?.toIntOrNull() }.firstOrNull()
     }
 }
