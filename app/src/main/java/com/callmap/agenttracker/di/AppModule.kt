@@ -35,7 +35,10 @@ import com.callmap.agenttracker.domain.repository.DeviceEventRepository
 import com.callmap.agenttracker.domain.repository.LocationRepository
 import com.callmap.agenttracker.domain.usecase.location.ShouldTrackLocationUseCase
 import com.callmap.agenttracker.domain.usecase.location.NextTriggerTimeCalculator
+import com.callmap.agenttracker.util.AlarmOptimizer
+import com.callmap.agenttracker.util.BatteryOptimizationManager
 import com.callmap.agenttracker.util.NetworkObserver
+import com.callmap.agenttracker.util.ProximityWakeLockManager
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import dagger.Module
@@ -213,6 +216,24 @@ object AppModule {
     @Singleton
     fun provideServiceRestartManager(@ApplicationContext context: Context): ServiceRestartManager {
         return ServiceRestartManager(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideProximityWakeLockManager(@ApplicationContext context: Context): ProximityWakeLockManager {
+        return ProximityWakeLockManager(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideBatteryOptimizationManager(@ApplicationContext context: Context): BatteryOptimizationManager {
+        return BatteryOptimizationManager(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideAlarmOptimizer(@ApplicationContext context: Context): AlarmOptimizer {
+        return AlarmOptimizer(context)
     }
 
     @Provides

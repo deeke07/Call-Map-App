@@ -27,6 +27,12 @@ interface AuthApi {
         @Body request: Map<String, String>
     ): Response<Map<String, Any>>
 
+    @POST("public/device/settings-received")
+    @Headers("Accept: application/json")
+    suspend fun acknowledgeSettingsReceived(
+        @Body request: Map<String, String>
+    ): Response<Map<String, Any>>
+
     companion object {
         const val BASE_URL = "https://callmap.solz.cloud/api/"
     }

@@ -52,6 +52,20 @@ class FetchConfigUseCase @Inject constructor(
 
                     sessionManager.saveRegistration(updatedRegistration)
                     Log.i("FetchConfigUseCase", "Config updated: $updatedRegistration")
+                    
+                    // Acknowledge settings received
+                    try {
+                        Log.d("FetchConfigUseCase", "Sending acknowledgment for UUID: ${updatedRegistration.deviceUuid}")
+                        val ackResponse = authApi.acknowledgeSettingsReceived(mapOf("device_uuid" to updatedRegistration.deviceUuid))
+                        if (ackResponse.isSuccessful) {
+                            Log.i("FetchConfigUseCase", "Settings acknowledgment sent successfully")
+                        } else {
+                            Log.e("FetchConfigUseCase", "Failed to acknowledge settings: ${ackResponse.errorBody()?.string()}")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("FetchConfigUseCase", "Error acknowledging settings", e)
+                    }
+
                     syncManager.scheduleTrackingAudit()
                 }
             } else {

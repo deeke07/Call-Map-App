@@ -116,7 +116,7 @@ class CallRecorderService : Service() {
         if (intent == null) {
             Log.d(TAG, "Service restarted with null intent. Checking if we should stop.")
             decrementAndCheckStop(startId)
-            return START_STICKY
+            return START_STICKY  // FIX: Ensure service restarts if killed
         }
 
         val action = intent.action
@@ -147,9 +147,8 @@ class CallRecorderService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is android.app.ForegroundServiceStartNotAllowedException) {
                 // App is not in a state where it can start a foreground service
             }
-            // If we can't start foreground, we shouldn't continue as a background service on Android 14+
-            stopSelf()
-            return START_NOT_STICKY
+            // FIX: Return START_STICKY to ensure service restarts on kill
+            return START_STICKY
         }
 
         when (action) {
@@ -229,7 +228,7 @@ class CallRecorderService : Service() {
                 }
             }
         }
-        return START_STICKY
+        return START_STICKY  // FIX: Always return START_STICKY to ensure service restarts after kill
     }
 
     private suspend fun stopInternalRecordingLocked() {
