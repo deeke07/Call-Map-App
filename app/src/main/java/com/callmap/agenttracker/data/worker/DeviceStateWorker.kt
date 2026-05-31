@@ -20,6 +20,7 @@ import com.callmap.agenttracker.domain.manager.ServiceManager
 import com.callmap.agenttracker.domain.repository.DeviceEventRepository
 import com.callmap.agenttracker.domain.usecase.location.ShouldTrackLocationUseCase
 import com.callmap.agenttracker.service.LocationService
+import com.callmap.agenttracker.util.TrackingLog
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.flow.first
@@ -40,15 +41,18 @@ class DeviceStateWorker @AssistedInject constructor(
         private const val POLL_INTERVAL_MINUTES = 2L
     }
 
+
+
     override suspend fun doWork(): Result {
-        Log.d(TAG, "Executing single state check...")
+        TrackingLog.d(TAG, "State check")
         
         try {
             // Heartbeat disabled to prevent 422 API errors
             // eventRepository.logEvent(EventManager.HEARTBEAT)
 
             checkAllStates()
-            
+            enforceTrackingService()
+
             // Immediately sync any changes detected (permissions, SIM, hardware, heartbeat)
             eventRepository.syncPendingEvents()
             
@@ -160,6 +164,24 @@ class DeviceStateWorker @AssistedInject constructor(
         checkNetworkState()
     }
 
+    /**
+     * Restarts [LocationService] when we are inside the tracking window but the FGS is not running.
+     * Closes the gap after OEM kill, swipe-away, or long-interval alarm batching.
+     */
+    private suspend fun enforceTrackingService() {
+        val registration = stateManager.sessionManager.getRegistration().first() ?: return
+        val shouldTrack = shouldTrackLocationUseCase(System.currentTimeMillis(), registration)
+        val isRunning = serviceManager.isServiceRunning(LocationService::class.java)
+
+        if (shouldTrack && !isRunning) {
+            TrackingLog.d(TAG, "Service down in tracking window — evaluate restart")
+            serviceManager.handleServiceLifecycle(true)
+        } else if (!shouldTrack && isRunning) {
+            Log.i(TAG, "Outside tracking window but service running — stopping")
+            serviceManager.handleServiceLifecycle(false)
+        }
+    }
+
     private fun scheduleNextCheck(context: Context) {
         val workRequest = OneTimeWorkRequestBuilder<DeviceStateWorker>()
             .setInitialDelay(POLL_INTERVAL_MINUTES, TimeUnit.MINUTES)
@@ -168,7 +190,7 @@ class DeviceStateWorker @AssistedInject constructor(
 
         WorkManager.getInstance(context).enqueueUniqueWork(
             "DeviceStateWorker_Periodic",
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            ExistingWorkPolicy.KEEP,
             workRequest
         )
     }

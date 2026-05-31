@@ -8,6 +8,7 @@ import android.os.PowerManager
 import android.util.Log
 import com.callmap.agenttracker.domain.manager.SyncManager
 import com.callmap.agenttracker.service.LocationService
+import com.callmap.agenttracker.util.TrackingLog
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
@@ -19,12 +20,13 @@ class ScheduleReceiver : BroadcastReceiver() {
 
     companion object {
         const val ACTION_LOCATION_ALARM = "com.callmap.agenttracker.ACTION_LOCATION_ALARM"
+        const val ACTION_SCHEDULE_AUDIT = "com.callmap.agenttracker.ACTION_SCHEDULE_AUDIT"
         private const val TAG = "ScheduleReceiver"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         val action = intent.action
-        Log.i(TAG, "Broadcast Received! Action: $action")
+        TrackingLog.d(TAG, "Broadcast: $action")
 
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val wakeLock = powerManager.newWakeLock(
@@ -38,17 +40,12 @@ class ScheduleReceiver : BroadcastReceiver() {
         try {
             when (action) {
                 ACTION_LOCATION_ALARM -> {
-                    Log.i(TAG, "Triggering LocationService from Alarm.")
+                    TrackingLog.i(TAG, "Location alarm — starting service")
                     startLocationService(context)
                 }
-                "WATCHDOG_CHECK" -> {
-                    Log.i(TAG, "Watchdog triggered audit.")
-                    syncManager.scheduleTrackingAudit()
-                }
-                else -> {
-                    Log.i(TAG, "Triggering Tracking Audit (Action: $action).")
-                    syncManager.scheduleTrackingAudit()
-                }
+                ACTION_SCHEDULE_AUDIT -> syncManager.scheduleTrackingAudit()
+                "WATCHDOG_CHECK" -> syncManager.scheduleTrackingAudit()
+                else -> syncManager.scheduleTrackingAudit()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error in onReceive", e)

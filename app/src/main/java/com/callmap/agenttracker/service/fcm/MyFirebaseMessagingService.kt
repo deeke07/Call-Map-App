@@ -56,8 +56,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
         when (type) {
             "dial_request" -> handleDialRequest(message.data)
-            "device_settings_changed" -> handleSettingsChange(title, body)
-            else -> showNotification(title, body)
+            "device_settings_changed" -> handleSettingsChange()
+            else -> Log.d("FCM", "Silent handling for type=$type (no agent notification)")
         }
     }
 
@@ -68,14 +68,11 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         val body = data["body"] ?: "You have a new call request"
 
         if (mobileNumber != null) {
-            showNotification(title, body, mobileNumber)
             makeCall(mobileNumber, metaData)
         }
     }
 
-    private fun handleSettingsChange(title: String, body: String) {
-        val SETTINGS_NOTIFICATION_ID = 2002
-        showNotification(title, body, null, SETTINGS_NOTIFICATION_ID)
+    private fun handleSettingsChange() {
         serviceScope.launch {
             Log.i("FCM", "Starting FetchConfigUseCase...")
             fetchConfigUseCase()

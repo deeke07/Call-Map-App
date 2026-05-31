@@ -6,6 +6,8 @@ import kotlinx.coroutines.flow.Flow
 
 interface LocationRepository {
     suspend fun saveLocation(location: LocationEntity)
+    /** Moves file spillover queue into Room when possible. */
+    suspend fun importSpilloverLocations(): Int
     suspend fun syncPendingLocations(): Resource<Int>
     suspend fun uploadSingleLocation(location: LocationEntity): Resource<Unit>
 }

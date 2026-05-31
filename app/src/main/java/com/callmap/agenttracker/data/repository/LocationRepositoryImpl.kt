@@ -1,6 +1,7 @@
 package com.callmap.agenttracker.data.repository
 
 import android.util.Log
+import com.callmap.agenttracker.data.local.LocationSpilloverStore
 import com.callmap.agenttracker.data.local.dao.LocationDao
 import com.callmap.agenttracker.data.local.entity.LocationEntity
 import com.callmap.agenttracker.data.local.entity.SyncStatus
@@ -23,7 +24,8 @@ class LocationRepositoryImpl @Inject constructor(
     private val dao: LocationDao,
     private val sessionManager: SessionManager,
     private val networkObserver: NetworkObserver,
-    private val cleanupManager: DataCleanupManager
+    private val cleanupManager: DataCleanupManager,
+    private val spilloverStore: LocationSpilloverStore
 ) : LocationRepository {
 
     private val syncMutex = Mutex()
@@ -34,8 +36,40 @@ class LocationRepositoryImpl @Inject constructor(
     }
 
     override suspend fun saveLocation(location: LocationEntity) {
-        dao.insertLocation(location)
-        Log.d(TAG, "Location saved locally: ${location.latitude}, ${location.longitude}")
+        var lastError: Exception? = null
+        repeat(3) { attempt ->
+            try {
+                dao.insertLocation(location)
+              //  Log.d(TAG, "Location saved locally: ${location.latitude}, ${location.longitude}")
+                return
+            } catch (e: Exception) {
+                lastError = e
+                Log.e(TAG, "Room insert attempt ${attempt + 1} failed: ${e.message}")
+                if (attempt < 2) delay(200L * (attempt + 1))
+            }
+        }
+        Log.e(TAG, "Room insert failed — writing to spillover file: ${lastError?.message}")
+        spilloverStore.append(location, source = "room_insert_failed")
+    }
+
+    override suspend fun importSpilloverLocations(): Int {
+        val lines = spilloverStore.readAll()
+        if (lines.isEmpty()) return 0
+
+        val remaining = mutableListOf<LocationSpilloverStore.SpillLine>()
+        var imported = 0
+        for (line in lines) {
+            try {
+                dao.insertLocation(line.toEntity())
+                imported++
+            } catch (e: Exception) {
+                Log.w(TAG, "Spillover import failed for (${line.latitude},${line.longitude}): ${e.message}")
+                remaining.add(line)
+            }
+        }
+        spilloverStore.rewrite(remaining)
+        if (imported > 0) Log.i(TAG, "Imported $imported locations from spillover (${remaining.size} remaining)")
+        return imported
     }
 
     override suspend fun uploadSingleLocation(location: LocationEntity): Resource<Unit> {
@@ -63,6 +97,7 @@ class LocationRepositoryImpl @Inject constructor(
 
         return try {
             syncMutex.withLock {
+                importSpilloverLocations()
                 var totalSynced = 0
                 var consecutiveFailures = 0
                 
@@ -89,6 +124,9 @@ class LocationRepositoryImpl @Inject constructor(
                             continue 
                         }
                         
+                        runCatching {
+                            dao.updateSyncStatus(pending.map { it.id }, SyncStatus.FAILED)
+                        }
                         Log.e(TAG, "Batch failed: ${result.message}. Session halted.")
                         return if (totalSynced > 0) Resource.Success(totalSynced) else result
                     }

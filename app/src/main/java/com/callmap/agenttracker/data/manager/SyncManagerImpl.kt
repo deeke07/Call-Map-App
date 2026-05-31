@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
+import com.callmap.agenttracker.util.TrackingLog
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -87,7 +88,7 @@ class SyncManagerImpl @Inject constructor(
     }
 
     override fun scheduleTrackingAudit() {
-        Log.i("SyncManager", "Enforcing Tracking Audit...")
+        TrackingLog.d("SyncManager", "Tracking audit")
 
         // A. Immediate Enforcement (Expedited Worker)
         // This ensures the service starts NOW if we are inside the window.
@@ -110,7 +111,7 @@ class SyncManagerImpl @Inject constructor(
 
             if (delay > 0) {
                 val triggerAt = now + delay
-                Log.i("SyncManager", "Next transition in ${delay/1000}s. Scheduling Precise Alarm.")
+                TrackingLog.d("SyncManager", "Next transition in ${delay / 1000}s")
                 alarmScheduler.scheduleExactAlarm(triggerAt)
             }
         }

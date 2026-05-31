@@ -10,6 +10,7 @@ import com.callmap.agenttracker.domain.manager.ServiceManager
 import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.usecase.location.ShouldTrackLocationUseCase
 import dagger.assisted.Assisted
+import com.callmap.agenttracker.util.TrackingLog
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.flow.first
 
@@ -28,7 +29,7 @@ class LocationScheduleWorker @AssistedInject constructor(
     }
 
     override suspend fun doWork(): Result {
-        Log.d(TAG, "Executing expedited tracking audit...")
+        TrackingLog.d(TAG, "Tracking audit")
         
         try {
             val settings = sessionManager.getRegistration().first()
@@ -41,7 +42,7 @@ class LocationScheduleWorker @AssistedInject constructor(
             val now = System.currentTimeMillis()
             val shouldBeTracking = shouldTrackUseCase(now, settings)
 
-            Log.i(TAG, "Audit Decision: shouldBeTracking=$shouldBeTracking")
+            TrackingLog.d(TAG, "shouldBeTracking=$shouldBeTracking")
             
             // Start or Stop the Foreground Service
             serviceManager.handleServiceLifecycle(shouldBeTracking)

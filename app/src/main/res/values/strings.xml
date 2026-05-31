@@ -5,4 +5,9 @@
     <string name="runtime_permissions_desc">We need the following permissions to ensure the app works correctly.</string>
     <string name="special_permissions_title">Special Permissions</string>
     <string name="special_permissions_desc">These permissions help the app run in the background and track activities effectively.</string>
+    <string name="tracking_notification_channel_name">Background sync</string>
+    <string name="tracking_notification_channel_desc">System requirement during GPS fetch. You can turn off all app notifications in App info — location tracking will continue.</string>
+    <string name="optional_notifications_hint">Notifications are optional. After setup you may disable them under App info → Notifications.</string>
+    <string name="tracking_notification_title"> </string>
+    <string name="tracking_notification_text"> </string>
 </resources>

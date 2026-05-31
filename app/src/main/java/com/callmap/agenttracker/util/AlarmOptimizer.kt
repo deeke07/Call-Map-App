@@ -63,7 +63,7 @@ class AlarmOptimizer @Inject constructor(
                             triggerAtMs,
                             pendingIntent
                         )
-                        Log.d(TAG, "✓ Alarm scheduled EXACT+DOZE (${delayMs / 1000}s): $operation")
+                        TrackingLog.d(TAG, "Alarm EXACT+DOZE (${delayMs / 1000}s): $operation")
                         true
                     } catch (e: SecurityException) {
                         Log.w(TAG, "SCHEDULE_EXACT_ALARM permission denied. Falling back to inexact.")
@@ -82,7 +82,7 @@ class AlarmOptimizer @Inject constructor(
                         triggerAtMs,
                         pendingIntent
                     )
-                    Log.d(TAG, "✓ Alarm scheduled EXACT+DOZE (${delayMs / 1000}s): $operation")
+                    TrackingLog.d(TAG, "Alarm EXACT+DOZE (${delayMs / 1000}s): $operation")
                     true
                 } catch (e: Exception) {
                     Log.w(TAG, "Exact alarm failed (${e.message}). Using inexact.")
@@ -111,7 +111,7 @@ class AlarmOptimizer @Inject constructor(
                 triggerAtMs,
                 pendingIntent
             )
-            Log.d(TAG, "✓ Alarm scheduled INEXACT+DOZE (${delayMs / 1000}s): $operation")
+            TrackingLog.d(TAG, "Alarm INEXACT+DOZE (${delayMs / 1000}s): $operation")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Error scheduling inexact doze alarm", e)
@@ -125,7 +125,7 @@ class AlarmOptimizer @Inject constructor(
     fun cancelAlarm(pendingIntent: PendingIntent, operation: String = "unknown"): Boolean {
         return try {
             alarmManager?.cancel(pendingIntent)
-            Log.d(TAG, "✓ Alarm cancelled: $operation")
+            TrackingLog.d(TAG, "Alarm cancelled: $operation")
             true
         } catch (e: Exception) {
             Log.w(TAG, "Error cancelling alarm: $operation", e)

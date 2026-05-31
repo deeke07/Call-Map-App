@@ -163,7 +163,7 @@ class DeviceEventRepositoryImpl @Inject constructor(
 
         WorkManager.getInstance(context).enqueueUniqueWork(
             "DeviceEventSync_Immediate",
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            ExistingWorkPolicy.KEEP,
             workRequest
         )
     }

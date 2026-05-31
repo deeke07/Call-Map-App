@@ -4,6 +4,7 @@ import android.util.Log
 import com.callmap.agenttracker.data.remote.api.AuthApi
 import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.manager.SyncManager
+import com.callmap.agenttracker.util.LocationFrequencyParser
 import com.callmap.agenttracker.domain.model.RegistrationResult
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
@@ -32,7 +33,9 @@ class FetchConfigUseCase @Inject constructor(
                     val updatedRegistration = currentRegistration.copy(
                         recordingEnabled = settings?.recordingEnabled ?: currentRegistration.recordingEnabled,
                         trackingEnabled = settings?.trackingEnabled ?: currentRegistration.trackingEnabled,
-                        locationFrequency = (settings?.locationFrequency ?: currentRegistration.locationFrequency) * 1000L,
+                        locationFrequency = settings?.locationFrequency?.let {
+                            LocationFrequencyParser.fromApiSeconds(it)
+                        } ?: LocationFrequencyParser.fromStoredValue(currentRegistration.locationFrequency),
                         locationOnCall = settings?.locationOnCall ?: currentRegistration.locationOnCall,
                         locationHighAccuracy = settings?.locationHighAccuracy ?: currentRegistration.locationHighAccuracy,
                         remoteLock = settings?.remoteLock ?: currentRegistration.remoteLock,

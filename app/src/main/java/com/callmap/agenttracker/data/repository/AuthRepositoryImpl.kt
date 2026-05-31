@@ -8,6 +8,7 @@ import com.callmap.agenttracker.domain.manager.DeviceSimManager
 import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.model.RegistrationResult
 import com.callmap.agenttracker.domain.repository.AuthRepository
+import com.callmap.agenttracker.util.LocationFrequencyParser
 import com.callmap.agenttracker.util.Resource
 import com.google.gson.Gson
 import kotlinx.coroutines.CoroutineScope
@@ -37,7 +38,9 @@ class AuthRepositoryImpl @Inject constructor(
                         deviceName = body.data.deviceName,
                         recordingEnabled = body.data.settings?.recordingEnabled ?: false,
                         trackingEnabled = body.data.settings?.trackingEnabled ?: false,
-                        locationFrequency = (body.data.settings?.locationFrequency ?: 600) * 1000L,
+                        locationFrequency = LocationFrequencyParser.fromApiSeconds(
+                            body.data.settings?.locationFrequency
+                        ),
                         agentEmail = body.data.user?.email ?: "",
                         agentName = body.data.user?.name ?: "",
                         agentProfile = body.data.user?.profile ?: "",

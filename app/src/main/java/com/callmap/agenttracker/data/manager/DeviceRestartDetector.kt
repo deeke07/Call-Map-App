@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.SystemClock
 import android.util.Log
+import com.callmap.agenttracker.util.TrackingLog
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -23,10 +24,12 @@ class DeviceRestartDetector @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
 
-    private val prefs: SharedPreferences = context.getSharedPreferences(
-        "device_restart_prefs",
-        Context.MODE_PRIVATE
-    )
+    private val prefs by lazy {
+        context.createDeviceProtectedStorageContext()
+            .getSharedPreferences("device_restart_prefs", Context.MODE_PRIVATE)
+    }
+
+
 
     companion object {
         private const val TAG = "DeviceRestartDetector"
@@ -71,7 +74,7 @@ class DeviceRestartDetector @Inject constructor(
      */
     fun recordTrackingState(isTracking: Boolean) {
         prefs.edit().putBoolean(KEY_WAS_TRACKING, isTracking).apply()
-        Log.d(TAG, "Tracking state recorded: $isTracking")
+        TrackingLog.d(TAG, "Tracking state recorded: $isTracking")
     }
 
     /**
@@ -88,7 +91,7 @@ class DeviceRestartDetector @Inject constructor(
      */
     fun clearRestartState() {
         prefs.edit().remove(KEY_WAS_TRACKING).apply()
-        Log.d(TAG, "Restart state cleared")
+        TrackingLog.d(TAG, "Restart state cleared")
     }
 
     /**

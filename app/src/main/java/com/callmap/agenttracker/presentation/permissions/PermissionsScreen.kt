@@ -13,8 +13,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.callmap.agenttracker.R
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -157,9 +159,28 @@ fun RuntimePermissionStep(onNext: () -> Unit) {
                     }
                 )
             }
+            if (PermissionManager.optionalRuntimePermissions.isNotEmpty()) {
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(R.string.optional_notifications_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                items(PermissionManager.optionalRuntimePermissions) { permission ->
+                    PermissionItem(
+                        title = "Notifications (optional)",
+                        isGranted = permissionsState[permission] ?: PermissionManager.isPermissionGranted(context, permission),
+                        onClick = { launcher.launch(arrayOf(permission)) }
+                    )
+                }
+            }
         }
 
-        val allGranted = permissionsState.values.all { it }
+        val allGranted = PermissionManager.runtimePermissions.all {
+            permissionsState[it] == true || PermissionManager.isPermissionGranted(context, it)
+        }
         val missingPermissions = permissionsState.filter { !it.value }.keys.toTypedArray()
 
         Button(
