@@ -600,7 +600,7 @@ class LocationService : Service() {
             runCatching {
                 val metadata = mutableMapOf("reason" to reason)
                 metadata.putAll(extra)
-                eventManager.logEvent(EventManager.LOCATION_TRACKING_STOPPED, metadata = metadata)
+             //   eventManager.logEvent(EventManager.LOCATION_TRACKING_STOPPED, metadata = metadata)
                 Log.w(TAG, "Tracking failed (in window): $reason")
             }
         }
