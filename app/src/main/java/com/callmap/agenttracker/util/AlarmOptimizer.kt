@@ -28,7 +28,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class AlarmOptimizer @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) {
 
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
@@ -56,7 +56,7 @@ class AlarmOptimizer @Inject constructor(
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 // Android 12+: Check if we can schedule exact alarms
-                if (alarmManager.canScheduleExactAlarms()) {
+                if (canScheduleExactAlarms()) {
                     try {
                         alarmManager.setExactAndAllowWhileIdle(
                             AlarmManager.RTC_WAKEUP,
@@ -66,12 +66,12 @@ class AlarmOptimizer @Inject constructor(
                         TrackingLog.d(TAG, "Alarm EXACT+DOZE (${delayMs / 1000}s): $operation")
                         true
                     } catch (e: SecurityException) {
-                        Log.w(TAG, "SCHEDULE_EXACT_ALARM permission denied. Falling back to inexact.")
+                        Log.w(TAG, "SCHEDULE_EXACT_ALARM permission denied or revoked. Falling back to inexact.")
                         scheduleInexactDozeAlarm(triggerAtMs, pendingIntent, operation)
                     }
                 } else {
-                    // Permission granted but quota exhausted - use inexact
-                    Log.w(TAG, "Exact alarm quota exhausted. Using inexact (still Doze-safe).")
+                    // Permission not granted or quota exhausted - use inexact
+                    Log.w(TAG, "Exact alarm permission NOT granted. Using inexact (still Doze-safe).")
                     scheduleInexactDozeAlarm(triggerAtMs, pendingIntent, operation)
                 }
             } else {

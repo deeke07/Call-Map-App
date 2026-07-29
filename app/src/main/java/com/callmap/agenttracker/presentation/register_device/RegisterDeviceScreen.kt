@@ -30,6 +30,22 @@ import com.callmap.agenttracker.presentation.register_device.components.QrScanne
 import org.json.JSONObject
 import android.widget.Toast
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import com.callmap.agenttracker.presentation.components.AppLogoHeader
+import com.callmap.agenttracker.presentation.components.PrimaryButton
+import com.callmap.agenttracker.presentation.components.SetupHeader
+import com.callmap.agenttracker.ui.theme.DarkBackground
+import com.callmap.agenttracker.ui.theme.NeonLime
+import com.callmap.agenttracker.ui.theme.SurfaceDark
+import com.callmap.agenttracker.ui.theme.TextPrimary
+import com.callmap.agenttracker.ui.theme.TextSecondary
+import com.callmap.agenttracker.ui.theme.BorderDark
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+
 @Composable
 fun RegisterDeviceScreen(
     onRegistrationSuccess: () -> Unit,
@@ -41,6 +57,7 @@ fun RegisterDeviceScreen(
     val context = LocalContext.current
 
     var showQrScanner by remember { mutableStateOf(false) }
+    var passwordVisible by remember { mutableStateOf(false) }
     
     // Handle back press to prevent accidental exit
     var lastBackPressTime by remember { mutableLongStateOf(0L) }
@@ -73,11 +90,12 @@ fun RegisterDeviceScreen(
                     val json = JSONObject(contents)
                     val qrEmail = json.optString("email")
                     val qrPasscode = json.optString("passcode")
+                    val qrBaseUrl = json.optString("base_url").takeIf { it.isNotBlank() }
 
                     if (qrEmail.isNotBlank() && qrPasscode.isNotBlank()) {
                         viewModel.onEmailChange(qrEmail)
                         viewModel.onPasscodeChange(qrPasscode)
-                        viewModel.register()
+                        viewModel.register(qrBaseUrl)
                     } else {
                         Toast.makeText(context, "Invalid QR: Missing email or passcode", Toast.LENGTH_LONG).show()
                     }
@@ -94,7 +112,6 @@ fun RegisterDeviceScreen(
         if (state.success != null) {
             onRegistrationSuccess()
         }
-        //onRegistrationSuccess()
     }
 
     LaunchedEffect(state.error) {
@@ -108,131 +125,173 @@ fun RegisterDeviceScreen(
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = DarkBackground
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-                // 1. statusBarsPadding() ensures we don't overlap with time/battery
-                // 2. navigationBarsPadding() ensures we don't overlap with the bottom pill/buttons
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = "Register Device",
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Text(
-                text = "Enter your credentials to link this device",
-                fontSize = 16.sp,
-                color = Color.Gray,
-                modifier = Modifier.padding(top = 8.dp, bottom = 32.dp)
-            )
-
-            OutlinedTextField(
-                value = email,
-                onValueChange = viewModel::onEmailChange,
-                label = { Text("Agent Email") },
-                placeholder = { Text("Enter your email") },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                leadingIcon = {
-                    Icon(Icons.Default.Person, contentDescription = null)
-                },
-                isError = state.passwordError != null,
-                supportingText = {
-                    if (state.passwordError != null) {
-                        Text(text = state.passwordError!!)
-                    }
-                },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                singleLine = true
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = passcode,
-                onValueChange = viewModel::onPasscodeChange,
-                label = { Text("Passcode") },
-                placeholder = { Text("Enter your passcode") },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                leadingIcon = {
-                    Icon(Icons.Default.Lock, contentDescription = null)
-                },
-                isError = state.usernameError != null,
-                supportingText = {
-                    if (state.usernameError != null) {
-                        Text(text = state.usernameError!!)
-                    }
-                },
-                singleLine = true
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Button(
-                onClick = viewModel::register,
+        Box(modifier = Modifier.fillMaxSize()) {
+            // Glow effect
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(12.dp),
-                enabled = !state.isLoading,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary
-                )
-            ) {
-                if (state.isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp
+                    .size(300.dp)
+                    .offset(x = (-100).dp, y = (-100).dp)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(NeonLime.copy(alpha = 0.15f), Color.Transparent)
+                        )
                     )
-                } else {
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+
+                Spacer(modifier = Modifier.height(50.dp))
+                AppLogoHeader(height = 70)
+                
+                Spacer(modifier = Modifier.height(48.dp))
+                
+                Text(
+                    text = "Register Device",
+                    style = MaterialTheme.typography.headlineLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                )
+                Text(
+                    text = "Enter your credentials to link this device",
+                    style = MaterialTheme.typography.bodyLarge.copy(
+                        color = TextSecondary
+                    ),
+                    modifier = Modifier.padding(top = 8.dp, bottom = 32.dp)
+                )
+
+                TextField(
+                    value = email,
+                    onValueChange = viewModel::onEmailChange,
+                    placeholder = { Text("Agent Email", color = TextSecondary) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(64.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    leadingIcon = {
+                        Icon(Icons.Default.Person, contentDescription = null, tint = NeonLime)
+                    },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = SurfaceDark,
+                        unfocusedContainerColor = SurfaceDark,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        cursorColor = NeonLime
+                    ),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                TextField(
+                    value = passcode,
+                    onValueChange = viewModel::onPasscodeChange,
+                    placeholder = { Text("Passcode", color = TextSecondary) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(64.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    leadingIcon = {
+                        Icon(Icons.Default.Lock, contentDescription = null, tint = NeonLime)
+                    },
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                imageVector = if (passwordVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                contentDescription = null,
+                                tint = TextSecondary
+                            )
+                        }
+                    },
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = SurfaceDark,
+                        unfocusedContainerColor = SurfaceDark,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        cursorColor = NeonLime
+                    ),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(32.dp))
+
+                PrimaryButton(
+                    text = "Register",
+                    onClick = viewModel::register,
+                    enabled = !state.isLoading
+                )
+
+                if (state.isLoading) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    CircularProgressIndicator(color = NeonLime)
+                }
+
+                Spacer(modifier = Modifier.weight(1f))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(modifier = Modifier.weight(1f).height(1.dp).background(BorderDark))
                     Text(
-                        text = "Register",
+                        text = "or",
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                        color = TextSecondary
+                    )
+                    Box(modifier = Modifier.weight(1f).height(1.dp).background(BorderDark))
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        when (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)) {
+                            PackageManager.PERMISSION_GRANTED -> {
+                                showQrScanner = true
+                            }
+                            else -> {
+                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(64.dp),
+                    shape = RoundedCornerShape(32.dp),
+                    border = BorderStroke(1.dp, NeonLime),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonLime)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.QrCodeScanner,
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    Text(
+                        text = "Scan QR Code",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            OutlinedButton(
-                onClick = {
-                    when (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)) {
-                        PackageManager.PERMISSION_GRANTED -> {
-                            showQrScanner = true
-                        }
-                        else -> {
-                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                        }
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(12.dp),
-                enabled = !state.isLoading
-            ) {
-                Icon(
-                    imageVector = Icons.Default.QrCodeScanner,
-                    contentDescription = null,
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-                Text(
-                    text = "Scan QR Code",
-                    fontSize = 16.sp
-                )
+                
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
 }
+

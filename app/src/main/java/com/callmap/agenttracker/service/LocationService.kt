@@ -26,6 +26,7 @@ import com.google.android.gms.tasks.CancellationTokenSource
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.atomic.AtomicReference
@@ -45,6 +46,7 @@ class LocationService : Service() {
     @Inject lateinit var networkObserver: com.callmap.agenttracker.util.NetworkObserver
     @Inject lateinit var alarmScheduler: AlarmScheduler
     @Inject lateinit var serviceRestartManager: ServiceRestartManager
+    @Inject lateinit var stateManager: com.callmap.agenttracker.data.manager.DeviceStateManager
 
     // ── State ─────────────────────────────────────────────────────────────────
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -102,6 +104,75 @@ class LocationService : Service() {
         if (ENABLE_VERBOSE_LOGS) Log.d(TAG, message)
     }
 
+    private suspend fun auditDeviceState() {
+        // 1. Audit Permissions
+        val permissions = mutableListOf(
+            android.Manifest.permission.RECORD_AUDIO to "RECORD_AUDIO",
+            android.Manifest.permission.ACCESS_FINE_LOCATION to "LOCATION",
+            android.Manifest.permission.READ_PHONE_STATE to "PHONE_STATE",
+            android.Manifest.permission.READ_CALL_LOG to "CALL_LOG",
+            android.Manifest.permission.READ_CONTACTS to "CONTACTS",
+            android.Manifest.permission.CALL_PHONE to "CALL_PHONE"
+        )
+
+        @Suppress("DEPRECATION")
+        permissions.add(android.Manifest.permission.PROCESS_OUTGOING_CALLS to "OUTGOING_CALLS")
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            permissions.add(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION to "BACKGROUND_LOCATION")
+        }
+
+        permissions.forEach { (perm, name) ->
+            val isGranted = ContextCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED
+            val enabledEvent = if (name == "LOCATION") EventManager.LOCATION_ENABLED else EventManager.PERMISSION_ENABLED
+            val disabledEvent = if (name == "LOCATION") EventManager.LOCATION_DISABLED else EventManager.PERMISSION_DISABLED
+
+            stateManager.trackBinaryState(
+                stateKey = "perm",
+                isEnabled = isGranted,
+                enabledEvent = enabledEvent,
+                disabledEvent = disabledEvent,
+                permissionName = name
+            )
+        }
+
+        // 2. Audit Hardware
+        val lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val isHardwareEnabled = try {
+            lm.isProviderEnabled(LocationManager.GPS_PROVIDER) || 
+            lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+        } catch (e: Exception) { false }
+        
+        stateManager.trackBinaryState(
+            stateKey = "location_hardware",
+            isEnabled = isHardwareEnabled,
+            enabledEvent = EventManager.LOCATION_ENABLED,
+            disabledEvent = EventManager.LOCATION_DISABLED
+        )
+
+        // 3. Audit Battery Optimization
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val isOptimizing = !pm.isIgnoringBatteryOptimizations(packageName)
+        stateManager.trackBinaryState(
+            stateKey = "battery_optimization",
+            isEnabled = isOptimizing,
+            enabledEvent = EventManager.BATTERY_OPTIMIZATION_ENABLED,
+            disabledEvent = null
+        )
+
+        // 4. Audit Network Status
+        stateManager.trackBinaryState(
+            stateKey = "network_status",
+            isEnabled = networkObserver.isConnected(),
+            enabledEvent = EventManager.DEVICE_ONLINE,
+            disabledEvent = EventManager.DEVICE_OFFLINE
+        )
+
+        // 5. Immediate Sync Trigger
+        // If a transition was logged above, this ensures it hits the backend within the 2-minute cycle.
+        runCatching { syncManager.triggerPendingSync() }
+    }
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     override fun onCreate() {
@@ -115,6 +186,17 @@ class LocationService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: ACTION_START
         logVerbose("onStartCommand action=$action")
+
+        // CRITICAL: Satisfy Android 12+ Foreground Service start requirements immediately.
+        // We call this BEFORE any branch logic to ensure the 5-second handshake is met.
+        val promoted = promoteForeground(startId)
+
+        if (!promoted) {
+            // If we couldn't promote to foreground, we must stop to avoid the crash.
+            if (startId != 0) stopSelf(startId) else stopSelf()
+            return START_NOT_STICKY
+        }
+
         when (action) {
             ACTION_STOP  -> initiateStop(startId)
             ACTION_START -> startTrackingGuarded(startId)
@@ -146,7 +228,7 @@ class LocationService : Service() {
 
     private fun startTrackingGuarded(startId: Int) {
         if (!trackingState.compareAndSet(TrackingState.IDLE, TrackingState.RUNNING)) {
-            runCatching { TrackingNotificationHelper.startForegroundSafely(this) }
+            // Already running, foreground was promoted in onStartCommand
             return
         }
         startTracking(startId)
@@ -155,9 +237,7 @@ class LocationService : Service() {
     // ── Core tracking ─────────────────────────────────────────────────────────
 
     private fun startTracking(startId: Int) {
-        acquireWakeLock(10_000L)
-
-        if (!promoteForeground(startId)) return  // resets state internally on failure
+        acquireWakeLock(30_000L)
 
         trackingJob?.cancel()
         trackingJob = serviceScope.launch {
@@ -191,15 +271,6 @@ class LocationService : Service() {
     }
 
     private fun promoteForeground(startId: Int): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            val hasBgLocation = androidx.core.content.ContextCompat.checkSelfPermission(
-                this, android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-            if (Build.VERSION.SDK_INT >= 34 && !hasBgLocation) {
-                logVerbose("Missing ACCESS_BACKGROUND_LOCATION")
-            }
-        }
-
         val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             TrackingNotificationHelper.startForegroundSafely(
                 this,
@@ -210,14 +281,13 @@ class LocationService : Service() {
         }
 
         if (!started) {
-            Log.e(TAG, "FGS start failed — alarm retry scheduled")
+            Log.e(TAG, "FGS start failed — scheduling retry")
+            // Log failure asynchronously
             serviceScope.launch {
                 logTrackingFailureInWindow("foreground_service_start_failed")
             }
             trackingState.set(TrackingState.IDLE)
-            releaseWakeLock()
             alarmScheduler.scheduleWatchdogAlarm(60_000L)
-            if (startId != 0) stopSelf(startId) else stopSelf()
             return false
         }
         return true
@@ -231,6 +301,11 @@ class LocationService : Service() {
 
         while (currentCoroutineContext().isActive) {
             val cycleStart = System.currentTimeMillis()
+            
+            // Audit device state (permissions/hardware) immediately on every cycle 
+            // to bypass WorkManager throttling and ensure 2-minute precision.
+            auditDeviceState()
+
             val registration = sessionManager.getRegistration().first()
             if (!currentCoroutineContext().isActive) break
 
@@ -403,14 +478,24 @@ class LocationService : Service() {
 
         val fetchLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LocationService::FetchLock")
-        runCatching {
-            fetchLock.acquire(timeoutMs + 10_000L)
-        }
-        return try {
-            val cts = CancellationTokenSource()
+        
+        val cts = CancellationTokenSource()
+        runCatching { fetchLock.acquire(timeoutMs + 10_000L) }
 
-            var location = withTimeoutOrNull(timeoutMs) {
-                fusedLocationClient.getCurrentLocation(effectivePriority, cts.token).await()
+        return try {
+            val request = CurrentLocationRequest.Builder()
+                .setPriority(effectivePriority)
+                .setDurationMillis(timeoutMs) // System-level timeout to prevent "late to expire"
+                .setMaxUpdateAgeMillis(if (isOffline) 60_000L else 30_000L)
+                .build()
+
+            var location = try {
+                withTimeout(timeoutMs + 5000L) { // Slightly longer than request timeout
+                    fusedLocationClient.getCurrentLocation(request, cts.token).await()
+                }
+            } catch (e: TimeoutCancellationException) {
+                logVerbose("Active scan timed out after ${timeoutMs}ms")
+                null
             }
 
             // Fallback chain on timeout or failure
@@ -422,7 +507,7 @@ class LocationService : Service() {
 
             if (location != null) {
                 val source = if (location.provider == null) "active_scan_fallback_$tier" else "active_scan_$tier"
-                persistLocation(location, batteryLevel, source, allowLenient = false)
+                persistLocation(location, batteryLevel, source, allowLenient = false, isDesperate = isOffline)
             } else {
                 val desperateLast = runCatching { fusedLocationClient.lastLocation.await() }.getOrNull()
                 if (desperateLast != null) {
@@ -430,7 +515,8 @@ class LocationService : Service() {
                         desperateLast,
                         batteryLevel,
                         "desperate_fallback_offline_$isOffline",
-                        allowLenient = true
+                        allowLenient = true,
+                        isDesperate = isOffline
                     )
                 } else {
                     logMissedPoint(batteryLevel, tier, "no_fix_active_scan_offline_$isOffline")
@@ -439,17 +525,15 @@ class LocationService : Service() {
             }
 
         } catch (e: CancellationException) {
-            throw e   // propagate — do not swallow
-
+            throw e
         } catch (e: SecurityException) {
             logMissedPoint(batteryLevel, tier, "permission_revoked")
             false
-
         } catch (e: Exception) {
             logVerbose("Scan error: ${e.message}")
             false
-
         } finally {
+            cts.cancel() // CRITICAL: Stop the system-level request immediately
             if (fetchLock.isHeld) runCatching { fetchLock.release() }
         }
     }
@@ -470,11 +554,12 @@ class LocationService : Service() {
         location: Location,
         battery: Int,
         source: String,
-        allowLenient: Boolean
+        allowLenient: Boolean,
+        isDesperate: Boolean = false
     ): Boolean {
-        val quality = LocationQualityGate.validate(location, allowLenient)
+        val quality = LocationQualityGate.validate(location, allowLenient, isDesperate)
         if (!quality.accepted) {
-            if (!allowLenient) {
+            if (!allowLenient && !isDesperate) {
                 logMissedPoint(battery, getBatteryTier(), "quality_${quality.reason}")
             }
             return false
@@ -607,7 +692,7 @@ class LocationService : Service() {
     }
 
     private fun logMissedPoint(battery: Int, tier: BatteryTier, reason: String) {
-        logVerbose("Missed point: $reason")
+        Log.w(TAG, "Missed point [Batt: $battery%, Tier: $tier]: $reason")
     }
 
     private fun hasLocationPermission(): Boolean {

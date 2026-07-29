@@ -6,5 +6,6 @@ data class HomeState(
     val registration: RegistrationResult? = null,
     val isTrackingActive: Boolean = false,
     val isLocationEnabled: Boolean = true,
+    val isLocationPermissionGranted: Boolean = true,
     val isLoading: Boolean = false
 )

@@ -8,13 +8,13 @@ import retrofit2.http.POST
 
 interface LocationApi {
 
-    @POST("public/device-locations")
+    @POST("/api/public/device-locations")
     @Headers("Accept: application/json")
     suspend fun submitLocation(
         @Body request: LocationRequest
     ): Response<LocationResponse>
 
-    @POST("public/device-locations/bulk")
+    @POST("/api/public/device-locations/bulk")
     @Headers("Accept: application/json")
     suspend fun submitBulkLocations(
         @Body request: BulkLocationRequest

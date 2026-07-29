@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.model.RegistrationResult
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
@@ -16,7 +17,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 
 @Singleton
 class SessionManagerImpl @Inject constructor(
-    private val context: Context
+    @param:ApplicationContext private val context: Context
 ) : SessionManager {
 
     companion object {
@@ -37,6 +38,7 @@ class SessionManagerImpl @Inject constructor(
         private val TRACKING_END_TIME = stringPreferencesKey("tracking_end_time")
         private val MONITOR_INTERNET_STATUS = booleanPreferencesKey("monitor_internet_status")
         private val DEVICE_STATUS = booleanPreferencesKey("device_status")
+        private val BASE_URL = stringPreferencesKey("base_url")
         
         // Dynamic State Keys Prefix
         private const val STATE_PREFIX = "state_"
@@ -91,6 +93,14 @@ class SessionManagerImpl @Inject constructor(
 
     override suspend fun clearSession() {
         context.dataStore.edit { it.clear() }
+    }
+
+    override suspend fun saveBaseUrl(url: String) {
+        context.dataStore.edit { it[BASE_URL] = url }
+    }
+
+    override fun getBaseUrl(): Flow<String?> {
+        return context.dataStore.data.map { it[BASE_URL] }
     }
 
     override fun getDeviceStates(): Flow<Map<String, String>> {

@@ -8,6 +8,9 @@ interface SessionManager {
     fun getRegistration(): Flow<RegistrationResult?>
     suspend fun clearSession()
     
+    suspend fun saveBaseUrl(url: String)
+    fun getBaseUrl(): Flow<String?>
+    
     // State Tracking for Deduplication
     fun getDeviceStates(): Flow<Map<String, String>>
     suspend fun updateDeviceState(key: String, value: String)

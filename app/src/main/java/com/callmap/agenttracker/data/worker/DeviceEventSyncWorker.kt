@@ -15,6 +15,11 @@ class DeviceEventSyncWorker @AssistedInject constructor(
     private val repository: DeviceEventRepository
 ) : CoroutineWorker(context, params) {
 
+    companion object {
+        const val WORK_NAME_PERIODIC = "DeviceEventSync_Periodic"
+        const val WORK_NAME_IMMEDIATE = "DeviceEventSync_Immediate"
+    }
+
     override suspend fun doWork(): Result {
         val result = repository.syncPendingEvents()
         return if (result.isSuccess) {

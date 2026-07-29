@@ -57,6 +57,10 @@ class DeviceStateReceiver : BroadcastReceiver() {
                             enabledEvent = EventManager.LOCATION_ENABLED,
                             disabledEvent = EventManager.LOCATION_DISABLED
                         )
+
+                        // Also trigger a full state check worker to catch any 
+                        // permission changes that happened while the app was killed.
+                        triggerFullStateCheck(context)
                     }
                     ConnectivityManager.CONNECTIVITY_ACTION -> {
                         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -83,14 +87,24 @@ class DeviceStateReceiver : BroadcastReceiver() {
         }
     }
 
+    private fun triggerFullStateCheck(context: Context) {
+        val workRequest = OneTimeWorkRequestBuilder<com.callmap.agenttracker.data.worker.DeviceStateWorker>()
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "DeviceStateWorker_Immediate",
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            workRequest
+        )
+    }
+
     private fun triggerSync(context: Context) {
         val workRequest = OneTimeWorkRequestBuilder<DeviceEventSyncWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
 
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "DeviceEventSync_Immediate_Receiver",
-            ExistingWorkPolicy.REPLACE,
+            DeviceEventSyncWorker.WORK_NAME_IMMEDIATE,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
             workRequest
         )
     }

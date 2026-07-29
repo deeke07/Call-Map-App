@@ -18,7 +18,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class DataCleanupManager @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val locationDao: LocationDao,
     private val callLogDao: CallLogDao
 ) {

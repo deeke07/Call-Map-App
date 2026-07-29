@@ -20,12 +20,19 @@ import javax.inject.Inject
 class RegisterDeviceUseCase @Inject constructor(
     private val repository: AuthRepository,
     private val sessionManager: SessionManager,
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) {
     @SuppressLint("HardwareIds")
-    operator fun invoke(passcode: String, email: String): Flow<Resource<RegistrationResult>> =
+    operator fun invoke(passcode: String, email: String, qrBaseUrl: String? = null): Flow<Resource<RegistrationResult>> =
         flow {
             emit(Resource.Loading())
+
+            // If qrBaseUrl is provided, save it to session manager before registration starts
+            if (qrBaseUrl != null) {
+                sessionManager.saveBaseUrl(qrBaseUrl)
+            } else {
+                sessionManager.saveBaseUrl("") // Ensure manual uses default BASE_URL
+            }
 
             //val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
 

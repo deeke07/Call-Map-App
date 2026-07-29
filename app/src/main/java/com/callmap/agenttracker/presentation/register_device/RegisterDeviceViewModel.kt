@@ -38,7 +38,7 @@ class RegisterDeviceViewModel @Inject constructor(
         _state.value = _state.value.copy(passwordError = null, error = "")
     }
 
-    fun register() {
+    fun register(qrBaseUrl: String? = null) {
         if (email.value.isBlank()) {
             _state.value = _state.value.copy(passwordError = "Email cannot be empty")
             return
@@ -48,7 +48,7 @@ class RegisterDeviceViewModel @Inject constructor(
             return
         }
 
-        registerDeviceUseCase(passcode.value, email.value).onEach { result ->
+        registerDeviceUseCase(passcode.value, email.value, qrBaseUrl).onEach { result ->
             when (result) {
                 is Resource.Success -> {
                     _state.value = _state.value.copy(

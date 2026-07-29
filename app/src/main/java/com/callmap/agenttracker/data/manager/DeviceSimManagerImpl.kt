@@ -14,12 +14,13 @@ import com.callmap.agenttracker.domain.manager.SessionManager
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class DeviceSimManagerImpl @Inject constructor(
-    private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val callApi: CallApi,
     private val sessionManager: SessionManager
 ) : DeviceSimManager {

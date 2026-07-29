@@ -134,6 +134,7 @@ class LocationRepositoryImpl @Inject constructor(
                 
                 if (totalSynced > 0) {
                     Log.i(TAG, "Sync Complete: Total $totalSynced locations.")
+                    sessionManager.updateDeviceState("last_sync_time", System.currentTimeMillis().toString())
                     // Cleanup synced records after successful sync
                     cleanupManager.cleanupSyncedLocations()
                 }

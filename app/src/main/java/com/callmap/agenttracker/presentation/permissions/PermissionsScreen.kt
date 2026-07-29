@@ -2,13 +2,20 @@ package com.callmap.agenttracker.presentation.permissions
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Hearing
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -21,10 +28,15 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.callmap.agenttracker.presentation.permissions.components.PermissionItem
+import com.callmap.agenttracker.presentation.components.AppLogoHeader
+import com.callmap.agenttracker.presentation.components.PrimaryButton
+import com.callmap.agenttracker.presentation.components.SetupHeader
+import com.callmap.agenttracker.presentation.components.PermissionSectionHeader
+import com.callmap.agenttracker.presentation.components.PermissionCard
 import com.callmap.agenttracker.service.MyAccessibilityService
+import com.callmap.agenttracker.ui.theme.DarkBackground
+import com.callmap.agenttracker.ui.theme.NeonLime
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PermissionsScreen(
     onAllPermissionsGranted: () -> Unit,
@@ -38,60 +50,37 @@ fun PermissionsScreen(
         }
     }
 
-    Scaffold(
-        topBar = {
-            CenterAlignedTopAppBar(
-                title = { Text("App Setup", fontWeight = FontWeight.Bold) },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(DarkBackground)
+    ) {
+        // Simple glow effect in background
+        Box(
+            modifier = Modifier
+                .size(300.dp)
+                .offset(x = (-100).dp, y = (-100).dp)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(NeonLime.copy(alpha = 0.15f), Color.Transparent)
+                    )
                 )
-            )
-        }
-    ) { padding ->
-        Surface(
+        )
+
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
-            color = MaterialTheme.colorScheme.background
+                .padding(horizontal = 24.dp)
+                .statusBarsPadding()
+                .navigationBarsPadding()
         ) {
+            AppLogoHeader(height = 60)
+            
             when (step) {
-                PermissionStep.EXPLANATION -> ExplanationStep(onNext = viewModel::nextStep)
                 PermissionStep.RUNTIME -> RuntimePermissionStep(onNext = viewModel::nextStep)
                 PermissionStep.SPECIAL -> SpecialPermissionStep(onNext = viewModel::nextStep)
                 PermissionStep.COMPLETED -> Unit
             }
-        }
-    }
-}
-
-@Composable
-fun ExplanationStep(onNext: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "Permissions Required",
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "To provide accurate agent tracking and call logging, we need several permissions. We will guide you through them step-by-step.",
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.height(32.dp))
-        Button(
-            onClick = onNext,
-            modifier = Modifier.fillMaxWidth().height(56.dp)
-        ) {
-            Text("Start Setup")
         }
     }
 }
@@ -130,51 +119,35 @@ fun RuntimePermissionStep(onNext: () -> Unit) {
         permissionsState = permissionsState + result
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp)
-    ) {
-        Text(
-            text = "Runtime Permissions",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "These are basic permissions needed for core app functions.",
-            modifier = Modifier.padding(vertical = 8.dp)
+    Column(modifier = Modifier.fillMaxSize()) {
+        SetupHeader(title = "App Setup")
+        
+        PermissionSectionHeader(
+            icon = Icons.Default.Shield,
+            title = "Runtime Permissions",
+            subtitle = "These are basic permissions needed for core app functions."
         )
 
         LazyColumn(
             modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 24.dp)
         ) {
             items(PermissionManager.runtimePermissions) { permission ->
                 val name = permission.substringAfterLast(".").replace("_", " ")
-                PermissionItem(
+                PermissionCard(
                     title = name,
+                    icon = when {
+                        permission.contains("RECORD_AUDIO") -> Icons.Default.Mic
+                        permission.contains("LOCATION") -> Icons.Default.Shield
+                        permission.contains("NOTIFICATIONS") -> Icons.Default.Notifications
+                        else -> Icons.Default.Shield
+                    },
                     isGranted = permissionsState[permission] ?: false,
                     onClick = {
                         launcher.launch(arrayOf(permission))
                     }
                 )
-            }
-            if (PermissionManager.optionalRuntimePermissions.isNotEmpty()) {
-                item {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = stringResource(R.string.optional_notifications_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                items(PermissionManager.optionalRuntimePermissions) { permission ->
-                    PermissionItem(
-                        title = "Notifications (optional)",
-                        isGranted = permissionsState[permission] ?: PermissionManager.isPermissionGranted(context, permission),
-                        onClick = { launcher.launch(arrayOf(permission)) }
-                    )
-                }
             }
         }
 
@@ -183,7 +156,8 @@ fun RuntimePermissionStep(onNext: () -> Unit) {
         }
         val missingPermissions = permissionsState.filter { !it.value }.keys.toTypedArray()
 
-        Button(
+        PrimaryButton(
+            text = if (allGranted) "Continue" else "Grant All Permissions",
             onClick = {
                 if (allGranted) {
                     onNext()
@@ -191,16 +165,8 @@ fun RuntimePermissionStep(onNext: () -> Unit) {
                     launcher.launch(missingPermissions)
                 }
             },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (allGranted) MaterialTheme.colorScheme.primary else Color(0xFFE91E63),
-                contentColor = Color.White
-            )
-        ) {
-            Text(if (allGranted) "Continue" else "Grant All Permissions")
-        }
+            modifier = Modifier.padding(bottom = 24.dp)
+        )
     }
 }
 
@@ -248,89 +214,81 @@ fun SpecialPermissionStep(onNext: () -> Unit) {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp)
-    ) {
-        Text(
-            text = "Special Permissions",
-            fontSize = 20.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = "Required for background reliability and call monitoring.",
-            modifier = Modifier.padding(vertical = 8.dp)
+    Column(modifier = Modifier.fillMaxSize()) {
+        SetupHeader(title = "App Setup")
+
+        PermissionSectionHeader(
+            icon = Icons.Default.Shield,
+            title = "Special Permissions",
+            subtitle = "Required for background reliability and call monitoring."
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 24.dp)
+        ) {
+            item {
+                PermissionCard(
+                    title = "Accessibility Service",
+                    icon = Icons.Default.Hearing,
+                    isGranted = isAccessibilityEnabled,
+                    onClick = { SpecialPermissionManager.openAccessibilitySettings(context) }
+                )
+            }
 
-        PermissionItem(
-            title = "Accessibility Service",
-            isGranted = isAccessibilityEnabled,
-            onClick = { SpecialPermissionManager.openAccessibilitySettings(context) }
-        )
+            item {
+                PermissionCard(
+                    title = "Ignore Battery Optimization",
+                    icon = Icons.Default.Shield,
+                    isGranted = isBatteryOptimized,
+                    onClick = { SpecialPermissionManager.requestIgnoreBatteryOptimization(context) }
+                )
+            }
 
-        Spacer(modifier = Modifier.height(12.dp))
+            item {
+                PermissionCard(
+                    title = "All Files Access (Recordings)",
+                    icon = Icons.Default.Shield,
+                    isGranted = isStorageManager,
+                    onClick = { SpecialPermissionManager.openManageExternalStorageSettings(context) }
+                )
+            }
 
-        PermissionItem(
-            title = "Ignore Battery Optimization",
-            isGranted = isBatteryOptimized,
-            onClick = { SpecialPermissionManager.requestIgnoreBatteryOptimization(context) }
-        )
+            item {
+                PermissionCard(
+                    title = "Background Location",
+                    subtitle = "Set to 'Allow all the time'",
+                    icon = Icons.Default.Shield,
+                    isGranted = isBackgroundLocationGranted,
+                    onClick = {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                            bgLocationLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                        }
+                    }
+                )
+            }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        PermissionItem(
-            title = "All Files Access (Recordings)",
-            isGranted = isStorageManager,
-            onClick = { SpecialPermissionManager.openManageExternalStorageSettings(context) }
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        PermissionItem(
-            title = "Background Location (Set to 'Allow all the time')",
-            isGranted = isBackgroundLocationGranted,
-            onClick = {
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                    bgLocationLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            if (!isLocationEnabled) {
+                item {
+                    PermissionCard(
+                        title = "Device Location (GPS)",
+                        icon = Icons.Default.Shield,
+                        isGranted = false,
+                        onClick = { SpecialPermissionManager.openLocationSettings(context) }
+                    )
                 }
             }
-        )
-
-        if (!isLocationEnabled) {
-            Spacer(modifier = Modifier.height(12.dp))
-            PermissionItem(
-                title = "Device Location (GPS)",
-                isGranted = false,
-                onClick = { SpecialPermissionManager.openLocationSettings(context) }
-            )
-        }
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        // Simple refresh button since these settings happen outside the app
-        TextButton(
-            onClick = {
-                isAccessibilityEnabled = SpecialPermissionManager.isAccessibilityServiceEnabled(context, MyAccessibilityService::class.java)
-                isBatteryOptimized = SpecialPermissionManager.isBatteryOptimizationIgnored(context)
-                isStorageManager = SpecialPermissionManager.isManageExternalStorageGranted(context)
-                isLocationEnabled = SpecialPermissionManager.isLocationHardwareEnabled(context)
-                isBackgroundLocationGranted = PermissionManager.isBackgroundLocationGranted(context)
-            },
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-        ) {
-            Text("Refresh Status")
         }
 
         val allGranted = isAccessibilityEnabled && isBatteryOptimized && isStorageManager && isLocationEnabled && isBackgroundLocationGranted
-        Button(
+        
+        PrimaryButton(
+            text = "Finish Setup",
             onClick = onNext,
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-            enabled = allGranted
-        ) {
-            Text("Finish Setup")
-        }
+            enabled = allGranted,
+            modifier = Modifier.padding(bottom = 24.dp)
+        )
     }
 }
+

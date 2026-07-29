@@ -9,12 +9,11 @@ import javax.inject.Inject
 @HiltViewModel
 class PermissionsViewModel @Inject constructor() : ViewModel() {
 
-    private val _currentStep = mutableStateOf(PermissionStep.EXPLANATION)
+    private val _currentStep = mutableStateOf(PermissionStep.RUNTIME)
     val currentStep: State<PermissionStep> = _currentStep
 
     fun nextStep() {
         _currentStep.value = when (_currentStep.value) {
-            PermissionStep.EXPLANATION -> PermissionStep.RUNTIME
             PermissionStep.RUNTIME -> PermissionStep.SPECIAL
             PermissionStep.SPECIAL -> PermissionStep.COMPLETED
             PermissionStep.COMPLETED -> PermissionStep.COMPLETED
@@ -23,7 +22,6 @@ class PermissionsViewModel @Inject constructor() : ViewModel() {
 }
 
 enum class PermissionStep {
-    EXPLANATION,
     RUNTIME,
     SPECIAL,
     COMPLETED

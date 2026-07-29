@@ -6,6 +6,7 @@ import com.callmap.agenttracker.domain.manager.SessionManager
 import com.callmap.agenttracker.domain.manager.SyncManager
 import com.callmap.agenttracker.util.LocationFrequencyParser
 import com.callmap.agenttracker.domain.model.RegistrationResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 
@@ -66,7 +67,8 @@ class FetchConfigUseCase @Inject constructor(
                             Log.e("FetchConfigUseCase", "Failed to acknowledge settings: ${ackResponse.errorBody()?.string()}")
                         }
                     } catch (e: Exception) {
-                        Log.e("FetchConfigUseCase", "Error acknowledging settings", e)
+                        if (e is CancellationException) throw e
+                        Log.e("FetchConfigUseCase", "Error acknowledging settings: ${e.message}")
                     }
 
                     syncManager.scheduleTrackingAudit()
@@ -75,7 +77,8 @@ class FetchConfigUseCase @Inject constructor(
                 Log.e("FetchConfigUseCase", "Failed to fetch config: ${response.errorBody()?.string()}")
             }
         } catch (e: Exception) {
-            Log.e("FetchConfigUseCase", "Error fetching config", e)
+            if (e is CancellationException) throw e
+            Log.e("FetchConfigUseCase", "Error fetching config: ${e.message}")
         }
     }
 }

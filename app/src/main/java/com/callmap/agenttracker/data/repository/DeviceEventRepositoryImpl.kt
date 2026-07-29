@@ -25,7 +25,7 @@ import javax.inject.Singleton
 
 @Singleton
 class DeviceEventRepositoryImpl @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val dao: DeviceEventDao,
     private val api: CallApi,
     private val sessionManager: SessionManager,
@@ -79,6 +79,7 @@ class DeviceEventRepositoryImpl @Inject constructor(
         return try {
             syncMutex.withLock {
                 var someFailed = false
+                var totalSyncedCount = 0
                 while (true) {
                     val pendingEvents = dao.getUnsyncedEvents(SyncStatus.PENDING, BATCH_SIZE)
                     if (pendingEvents.isEmpty()) {
@@ -88,7 +89,10 @@ class DeviceEventRepositoryImpl @Inject constructor(
                     for (event in pendingEvents) {
                         val successResult = uploadEvent(event)
                         when (successResult) {
-                            UploadResult.SUCCESS -> dao.deleteEventById(event.id)
+                            UploadResult.SUCCESS -> {
+                                dao.deleteEventById(event.id)
+                                totalSyncedCount++
+                            }
                             UploadResult.PERMANENT_FAILURE -> dao.updateSyncStatus(event.id, SyncStatus.FAILED)
                             UploadResult.RETRYABLE_FAILURE -> {
                                 someFailed = true
@@ -102,6 +106,11 @@ class DeviceEventRepositoryImpl @Inject constructor(
                         }
                     }
                 }
+
+                if (totalSyncedCount > 0) {
+                    sessionManager.updateDeviceState("last_sync_time", System.currentTimeMillis().toString())
+                }
+
                 if (someFailed) {
                     Result.failure<Unit>(Exception("Some events failed to sync"))
                 } else {
@@ -162,8 +171,8 @@ class DeviceEventRepositoryImpl @Inject constructor(
             .build()
 
         WorkManager.getInstance(context).enqueueUniqueWork(
-            "DeviceEventSync_Immediate",
-            ExistingWorkPolicy.KEEP,
+            DeviceEventSyncWorker.WORK_NAME_IMMEDIATE,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
             workRequest
         )
     }

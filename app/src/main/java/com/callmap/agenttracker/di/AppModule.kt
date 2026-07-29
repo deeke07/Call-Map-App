@@ -51,6 +51,9 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.firstOrNull
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -58,8 +61,30 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideOkHttpClient(): OkHttpClient {
+    fun provideOkHttpClient(sessionManager: SessionManager): OkHttpClient {
         return OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val baseUrl = runBlocking { sessionManager.getBaseUrl().firstOrNull() }
+                val originalRequest = chain.request()
+                if (!baseUrl.isNullOrBlank()) {
+                    try {
+                        val newBaseUrl = baseUrl.toHttpUrlOrNull()
+                        if (newBaseUrl != null) {
+                            val newUrl = originalRequest.url.newBuilder()
+                                .scheme(newBaseUrl.scheme)
+                                .host(newBaseUrl.host)
+                                .port(newBaseUrl.port)
+                                .build()
+                            return@addInterceptor chain.proceed(
+                                originalRequest.newBuilder().url(newUrl).build()
+                            )
+                        }
+                    } catch (e: Exception) {
+                        // Fallback to original if URL is invalid
+                    }
+                }
+                chain.proceed(originalRequest)
+            }
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(90, TimeUnit.SECONDS)
             .writeTimeout(90, TimeUnit.SECONDS)

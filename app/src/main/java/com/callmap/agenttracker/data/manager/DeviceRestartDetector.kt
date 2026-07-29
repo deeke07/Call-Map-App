@@ -21,7 +21,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class DeviceRestartDetector @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) {
 
     private val prefs by lazy {

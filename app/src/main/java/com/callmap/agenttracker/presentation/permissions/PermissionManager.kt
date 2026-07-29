@@ -4,19 +4,23 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 
 object PermissionManager {
 
     /** Required for tracking and calls — notifications are optional (agents disable in App info). */
-    val runtimePermissions = listOf(
+    val runtimePermissions = listOfNotNull(
         Manifest.permission.RECORD_AUDIO,
         Manifest.permission.ACCESS_FINE_LOCATION,
         Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.PROCESS_OUTGOING_CALLS,
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R) Manifest.permission.PROCESS_OUTGOING_CALLS else null,
         Manifest.permission.CALL_PHONE,
         Manifest.permission.READ_CALL_LOG,
-        Manifest.permission.READ_CONTACTS
+        Manifest.permission.READ_CONTACTS,
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.POST_NOTIFICATIONS
+        } else null
     )
 
     val optionalRuntimePermissions = listOfNotNull(

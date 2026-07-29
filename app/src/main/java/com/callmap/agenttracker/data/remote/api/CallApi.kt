@@ -15,14 +15,14 @@ import retrofit2.http.Part
 interface CallApi {
 
     @Headers("Accept: application/json")
-    @POST("public/device-sims/bulk")
+    @POST("/api/public/device-sims/bulk")
     suspend fun registerDeviceSims(
         @Body request: com.callmap.agenttracker.data.remote.dto.DeviceSimBulkRequest
     ): Response<com.callmap.agenttracker.data.remote.dto.DeviceSimBulkResponse>
 
     @Headers("Accept: application/json")
     @Multipart
-    @POST("public/calls")
+    @POST("/api/public/calls")
     suspend fun submitCallLog(
         @Part("device_uuid") deviceUuid: RequestBody,
         @Part("device_sim_uuid") deviceSimUuid: RequestBody?,
@@ -48,7 +48,7 @@ interface CallApi {
     ): Response<JsonObject>
 
     @Headers("Accept: application/json")
-    @POST("public/device-event-logs")
+    @POST("/api/public/device-event-logs")
     suspend fun submitDeviceEvent(
         @Body request: DeviceEventRequest
     ): Response<DeviceEventResponse>

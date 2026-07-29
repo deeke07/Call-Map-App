@@ -19,7 +19,7 @@ import javax.inject.Singleton
 
 @Singleton
 class SyncManagerImpl @Inject constructor(
-    @ApplicationContext private val context: Context,
+    @param:ApplicationContext private val context: Context,
     private val sessionManager: SessionManager,
     private val nextTriggerCalculator: NextTriggerTimeCalculator,
     private val alarmScheduler: AlarmScheduler
@@ -32,6 +32,16 @@ class SyncManagerImpl @Inject constructor(
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
+        // 0. Observe network status to trigger sync on reconnection
+        scope.launch {
+            com.callmap.agenttracker.util.NetworkObserver(context).observe().collect { status ->
+                if (status == com.callmap.agenttracker.util.NetworkObserver.Status.Available) {
+                    TrackingLog.i("SyncManager", "Reconnected — triggering bulk sync")
+                    triggerPendingSync()
+                }
+            }
+        }
+
         // 1. Periodic Data Syncs (Opportunistic)
         enqueuePeriodic<LocationSyncWorker>(LocationSyncWorker.WORK_NAME, constraints)
         enqueuePeriodic<CallSyncWorker>(CallSyncWorker.WORK_NAME, constraints)
@@ -43,12 +53,21 @@ class SyncManagerImpl @Inject constructor(
             .build()
 
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-            "DeviceStateCheck_Periodic",
+            "DeviceStateCheck_Periodic_Main",
             ExistingPeriodicWorkPolicy.UPDATE,
             stateCheckRequest
         )
+
+        // 3. Kickstart the 2-minute high-frequency state loop immediately
+        val initialStateCheck = OneTimeWorkRequestBuilder<DeviceStateWorker>()
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "DeviceStateWorker_Periodic",
+            ExistingWorkPolicy.KEEP,
+            initialStateCheck
+        )
         
-        // 3. Kickstart the tracking schedule
+        // 4. Kickstart the tracking schedule
         scheduleTrackingAudit()
     }
 
@@ -84,7 +103,11 @@ class SyncManagerImpl @Inject constructor(
             .setConstraints(constraints)
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .build()
-        WorkManager.getInstance(context).enqueueUniqueWork("ImmediateDeviceEventSync", ExistingWorkPolicy.REPLACE, eventRequest)
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            DeviceEventSyncWorker.WORK_NAME_IMMEDIATE,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            eventRequest
+        )
     }
 
     override fun scheduleTrackingAudit() {
@@ -98,7 +121,7 @@ class SyncManagerImpl @Inject constructor(
             
         WorkManager.getInstance(context).enqueueUniqueWork(
             LocationScheduleWorker.WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
             request
         )
 

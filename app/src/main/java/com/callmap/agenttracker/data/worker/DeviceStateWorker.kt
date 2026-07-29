@@ -18,6 +18,7 @@ import com.callmap.agenttracker.data.manager.DeviceStateManager
 import com.callmap.agenttracker.domain.manager.EventManager
 import com.callmap.agenttracker.domain.manager.ServiceManager
 import com.callmap.agenttracker.domain.repository.DeviceEventRepository
+import com.callmap.agenttracker.domain.repository.LocationRepository
 import com.callmap.agenttracker.domain.usecase.location.ShouldTrackLocationUseCase
 import com.callmap.agenttracker.service.LocationService
 import com.callmap.agenttracker.util.TrackingLog
@@ -33,47 +34,87 @@ class DeviceStateWorker @AssistedInject constructor(
     private val stateManager: DeviceStateManager,
     private val serviceManager: ServiceManager,
     private val eventRepository: DeviceEventRepository,
+    private val locationRepository: LocationRepository,
     private val shouldTrackLocationUseCase: ShouldTrackLocationUseCase
 ) : CoroutineWorker(context, params) {
 
     companion object {
         private const val TAG = "DeviceStateWorker"
-        private const val POLL_INTERVAL_MINUTES = 2L
+        private const val POLL_INTERVAL_MINUTES = 5L
     }
 
 
 
     override suspend fun doWork(): Result {
-        TrackingLog.d(TAG, "State check")
+        TrackingLog.d(TAG, "Starting state check cycle")
         
         try {
-            // Heartbeat disabled to prevent 422 API errors
-            // eventRepository.logEvent(EventManager.HEARTBEAT)
+            // Verify session is valid before proceeding
+            val registration = stateManager.sessionManager.getRegistration().first()
+            if (registration == null) {
+                TrackingLog.w(TAG, "Watchdog: No active registration, skipping check")
+                return Result.success()
+            }
+
+            // Sync locations if any are pending
+            try {
+                locationRepository.syncPendingLocations()
+            } catch (e: Exception) {
+                Log.w(TAG, "Location sync skipped in cycle", e)
+            }
 
             checkAllStates()
+            checkAccessibilityService()
             enforceTrackingService()
 
-            // Immediately sync any changes detected (permissions, SIM, hardware, heartbeat)
-            eventRepository.syncPendingEvents()
-            
-            // Schedule the NEXT check in 2 minutes
-            scheduleNextCheck(context)
+            // Try to sync, but don't let a network error break the 2-minute loop
+            try {
+                eventRepository.syncPendingEvents()
+            } catch (e: Exception) {
+                Log.w(TAG, "Sync failed during state check, will retry in next cycle", e)
+            }
             
             return Result.success()
         } catch (e: Exception) {
-            Log.e(TAG, "State check failed", e)
-            return Result.retry()
+            Log.e(TAG, "Critical error in state check loop", e)
+            // Even on critical error, we want to try again in 2 minutes
+            return Result.success()
+        } finally {
+            scheduleNextCheck(context)
         }
     }
 
+    private suspend fun checkAccessibilityService() {
+        val isEnabled = serviceManager.isServiceRunning(com.callmap.agenttracker.service.MyAccessibilityService::class.java)
+        stateManager.trackBinaryState(
+            stateKey = "accessibility_service",
+            isEnabled = isEnabled,
+            enabledEvent = EventManager.PERMISSION_ENABLED,
+            disabledEvent = EventManager.PERMISSION_DISABLED,
+            permissionName = "ACCESSIBILITY"
+        )
+    }
+
+
     private suspend fun checkPermissions() {
+        // Fetch states once to optimize performance and prevent race conditions within the loop
+        val lastKnownStates = stateManager.sessionManager.getDeviceStates().first()
+        
         val permissions = mutableListOf(
             Manifest.permission.RECORD_AUDIO to "RECORD_AUDIO",
             Manifest.permission.ACCESS_FINE_LOCATION to "LOCATION",
             Manifest.permission.READ_PHONE_STATE to "PHONE_STATE",
             Manifest.permission.READ_CALL_LOG to "CALL_LOG",
-            Manifest.permission.READ_CONTACTS to "CONTACTS"
+            Manifest.permission.READ_CONTACTS to "CONTACTS",
+            Manifest.permission.CALL_PHONE to "CALL_PHONE"
         )
+
+        @Suppress("DEPRECATION")
+        permissions.add(Manifest.permission.PROCESS_OUTGOING_CALLS to "OUTGOING_CALLS")
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS to "NOTIFICATIONS")
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             permissions.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION to "BACKGROUND_LOCATION")
@@ -83,14 +124,18 @@ class DeviceStateWorker @AssistedInject constructor(
             val isGranted = ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
             
             val storageKey = "perm_$name"
-            val lastKnownStates = stateManager.sessionManager.getDeviceStates().first()
             val wasEnabled = lastKnownStates[storageKey] == "true"
+
+            // Use specific LOCATION_DISABLED/ENABLED events for location permission 
+            // to ensure consistency with hardware states and better backend visibility.
+            val enabledEvent = if (name == "LOCATION") EventManager.LOCATION_ENABLED else EventManager.PERMISSION_ENABLED
+            val disabledEvent = if (name == "LOCATION") EventManager.LOCATION_DISABLED else EventManager.PERMISSION_DISABLED
 
             stateManager.trackBinaryState(
                 stateKey = "perm",
                 isEnabled = isGranted,
-                enabledEvent = EventManager.PERMISSION_ENABLED,
-                disabledEvent = EventManager.PERMISSION_DISABLED,
+                enabledEvent = enabledEvent,
+                disabledEvent = disabledEvent,
                 permissionName = name
             )
 
@@ -188,9 +233,13 @@ class DeviceStateWorker @AssistedInject constructor(
             .setConstraints(Constraints.NONE) // Heartbeat should run even if low battery/no net (it will queue)
             .build()
 
+        // Use APPEND_OR_REPLACE instead of REPLACE to avoid WorkerStoppedException.
+        // REPLACE triggers self-cancellation because the current worker is still RUNNING
+        // when this is called in the finally {} block. APPEND_OR_REPLACE ensures the next 
+        // cycle is queued to start after this one finishes, without interrupting it.
         WorkManager.getInstance(context).enqueueUniqueWork(
             "DeviceStateWorker_Periodic",
-            ExistingWorkPolicy.KEEP,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
             workRequest
         )
     }

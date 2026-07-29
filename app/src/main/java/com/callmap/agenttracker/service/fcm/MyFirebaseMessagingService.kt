@@ -55,9 +55,18 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         val body = message.data["body"] ?: "New configuration has been applied."
 
         when (type) {
-            "dial_request" -> handleDialRequest(message.data)
-            "device_settings_changed" -> handleSettingsChange()
-            else -> Log.d("FCM", "Silent handling for type=$type (no agent notification)")
+            "dial_request" -> {
+                showNotification(title, body)
+                handleDialRequest(message.data)
+            }
+            "device_settings_changed" -> {
+                showNotification(title, body)
+                handleSettingsChange()
+            }
+            else -> {
+                // For any other data messages, show the notification
+                showNotification(title, body)
+            }
         }
     }
 

@@ -9,31 +9,31 @@ import retrofit2.http.POST
 
 interface AuthApi {
 
-    @POST("public/devices/register")
+    @POST("/api/public/devices/register")
     @Headers("Accept: application/json")
     suspend fun registerDevice(
         @Body request: DeviceRegistrationRequest
     ): Response<DeviceRegistrationResponse>
 
-    @POST("public/device")
+    @POST("/api/public/device")
     @Headers("Accept: application/json")
     suspend fun getDeviceConfig(
         @Body request: Map<String, String>
     ): Response<DeviceRegistrationResponse>
 
-    @POST("public/device/offline")
+    @POST("/api/public/device/offline")
     @Headers("Accept: application/json")
     suspend fun markDeviceOffline(
         @Body request: Map<String, String>
     ): Response<Map<String, Any>>
 
-    @POST("public/device/settings-received")
+    @POST("/api/public/device/settings-received")
     @Headers("Accept: application/json")
     suspend fun acknowledgeSettingsReceived(
         @Body request: Map<String, String>
     ): Response<Map<String, Any>>
 
     companion object {
-        const val BASE_URL = "https://callmap.solz.cloud/api/"
+        const val BASE_URL = "https://callmap.solz.cloud"
     }
 }

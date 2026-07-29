@@ -19,7 +19,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class ProximityWakeLockManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @param:ApplicationContext private val context: Context
 ) {
 
     private val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
