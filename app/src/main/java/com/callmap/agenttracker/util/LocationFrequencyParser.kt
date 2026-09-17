@@ -13,17 +13,25 @@ object LocationFrequencyParser {
     const val MIN_INTERVAL_MS = MIN_INTERVAL_SECONDS * 1000L
     const val MAX_INTERVAL_MS = MAX_INTERVAL_SECONDS * 1000L
 
-    /** API / registration: value is seconds (e.g. 120 = 2 minutes). */
-    fun fromApiSeconds(seconds: Long?): Long {
-        val sec = (seconds ?: DEFAULT_INTERVAL_SECONDS).coerceIn(MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS)
-        return sec * 1000L
+    /** API / registration: value is often seconds (e.g. 120 = 2 minutes) but logs show 120000. */
+    fun fromApiSeconds(value: Long?): Long {
+        if (value == null) return DEFAULT_INTERVAL_SECONDS * 1000L
+        
+        // Resilience: If backend sends milliseconds (e.g. 120000) instead of seconds (120)
+        val ms = if (value >= 30_000L) {
+            value // It's already milliseconds
+        } else {
+            value * 1000L // It's seconds
+        }
+        
+        return ms.coerceIn(MIN_INTERVAL_MS, MAX_INTERVAL_MS)
     }
 
     /** Session DataStore value — normally ms; legacy entries may still be raw seconds. */
     fun fromStoredValue(stored: Long): Long {
         val ms = when {
-            stored in MIN_INTERVAL_MS..MAX_INTERVAL_MS -> stored
-            stored in MIN_INTERVAL_SECONDS..MAX_INTERVAL_SECONDS -> stored * 1000L
+            stored >= MIN_INTERVAL_MS -> stored // Milliseconds
+            stored in MIN_INTERVAL_SECONDS..MAX_INTERVAL_SECONDS -> stored * 1000L // Seconds
             else -> DEFAULT_INTERVAL_SECONDS * 1000L
         }
         return ms.coerceIn(MIN_INTERVAL_MS, MAX_INTERVAL_MS)

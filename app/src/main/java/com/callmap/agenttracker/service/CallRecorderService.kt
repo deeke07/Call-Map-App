@@ -136,8 +136,8 @@ class CallRecorderService : Service() {
                     54321,
                     createNotification("Processing call with $number"),
                     android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
-                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC or
-                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                            android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                 //           android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
                 )
             } else {
                 startForeground(54321, createNotification("Processing call with $number"))
@@ -415,7 +415,7 @@ class CallRecorderService : Service() {
         // 2. Fetch CallLog (Retry up to 20s)
         val callLogDetails = getSystemCallLogDetails(number, startTime, type)
 
-        val finalCallerName = callLogDetails?.name
+        val finalCallerName = callLogDetails?.name ?: getContactName(number) ?: "Unknown"
         val finalNumber = callLogDetails?.number ?: number
         val systemDuration = callLogDetails?.duration ?: 0L
         val logStartTime = callLogDetails?.timestamp ?: startTime
@@ -594,11 +594,12 @@ class CallRecorderService : Service() {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) CallLog.Calls.PHONE_ACCOUNT_ID else CallLog.Calls.NUMBER
                 )
                 
-                val timeWindow = 15_000L // Increased window for better matching
+                val timeWindowBefore = 120_000L // 2 minutes before
+                val timeWindowAfter = 30_000L  // 30 seconds after
                 val selection = "${CallLog.Calls.DATE} >= ? AND ${CallLog.Calls.DATE} <= ?"
                 val selectionArgs = arrayOf(
-                    (startTimeMillis - timeWindow).toString(),
-                    (startTimeMillis + timeWindow).toString()
+                    (startTimeMillis - timeWindowBefore).toString(),
+                    (startTimeMillis + timeWindowAfter).toString()
                 )
 
                 val candidates = mutableListOf<SystemCallLogInfo>()
@@ -615,12 +616,16 @@ class CallRecorderService : Service() {
                         val logStart = cursor.getLong(cursor.getColumnIndexOrThrow(CallLog.Calls.DATE))
                         val logDuration = cursor.getLong(cursor.getColumnIndexOrThrow(CallLog.Calls.DURATION))
                         val type = cursor.getInt(cursor.getColumnIndexOrThrow(CallLog.Calls.TYPE))
-                        val name = cursor.getString(cursor.getColumnIndexOrThrow(CallLog.Calls.CACHED_NAME)) ?: getContactName(logNumber)
+                        val contactName = getContactName(logNumber)
                         val subId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                             cursor.getString(cursor.getColumnIndexOrThrow(CallLog.Calls.PHONE_ACCOUNT_ID))
                         } else null
 
-                        val isTypeMatch = if (targetType == CallLog.Calls.INCOMING_TYPE) {
+                        val isTypeMatch = if (isUnknown) {
+                            // If we don't know the number, we are less sure about the type too
+                            // (e.g. missed RINGING state might cause us to think it's OUTGOING)
+                            true
+                        } else if (targetType == CallLog.Calls.INCOMING_TYPE) {
                             type == CallLog.Calls.INCOMING_TYPE ||
                                     type == CallLog.Calls.MISSED_TYPE ||
                                     type == CallLog.Calls.REJECTED_TYPE ||
@@ -631,7 +636,8 @@ class CallRecorderService : Service() {
                         }
 
                         val isMatch = if (isUnknown) {
-                            abs(logStart - startTimeMillis) <= 15_000 && isTypeMatch
+                            // If initial number was unknown, be more lenient with the time window
+                            (startTimeMillis - logStart) in -30_000L..120_000L && isTypeMatch
                         } else {
                             val normLog = normalizeNumber(logNumber)
                             val normTarget = normalizeNumber(number)
@@ -639,7 +645,7 @@ class CallRecorderService : Service() {
                         }
 
                         if (isMatch) {
-                            candidates.add(SystemCallLogInfo(logNumber, name, logDuration, type, logStart, subId))
+                            candidates.add(SystemCallLogInfo(logNumber, contactName, logDuration, type, logStart, subId))
                         }
                     }
                 }
@@ -665,13 +671,21 @@ class CallRecorderService : Service() {
     }
 
     private fun getContactName(phoneNumber: String): String? {
-        if (phoneNumber == "Unknown") return null
+        if (phoneNumber == "Unknown" || phoneNumber.isBlank()) return null
         try {
             val uri = Uri.withAppendedPath(ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(phoneNumber))
             contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) return cursor.getString(0)
+                if (cursor.moveToFirst()) {
+                    val name = cursor.getString(0)
+                    // Ensure the name actually contains letters to avoid using the phone number as a name
+                    if (!name.isNullOrBlank() && name.any { it.isLetter() }) {
+                        return name
+                    }
+                }
             }
-        } catch (e: Exception) { }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error looking up contact name", e)
+        }
         return null
     }
 

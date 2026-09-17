@@ -18,9 +18,13 @@ class ScheduleReceiver : BroadcastReceiver() {
     @Inject
     lateinit var syncManager: SyncManager
 
+    @Inject
+    lateinit var alarmScheduler: com.callmap.agenttracker.data.manager.AlarmScheduler
+
     companion object {
         const val ACTION_LOCATION_ALARM = "com.callmap.agenttracker.ACTION_LOCATION_ALARM"
         const val ACTION_SCHEDULE_AUDIT = "com.callmap.agenttracker.ACTION_SCHEDULE_AUDIT"
+        const val ACTION_DAILY_CHECK = "com.callmap.agenttracker.ACTION_DAILY_CHECK"
         private const val TAG = "ScheduleReceiver"
     }
 
@@ -42,6 +46,12 @@ class ScheduleReceiver : BroadcastReceiver() {
                 ACTION_LOCATION_ALARM -> {
                     TrackingLog.i(TAG, "Location alarm — starting service")
                     startLocationService(context)
+                }
+                ACTION_DAILY_CHECK -> {
+                    TrackingLog.i(TAG, "Daily health check triggered")
+                    syncManager.scheduleTrackingAudit()
+                    startLocationService(context)
+                    alarmScheduler.scheduleDailyHealthCheck()
                 }
                 ACTION_SCHEDULE_AUDIT -> syncManager.scheduleTrackingAudit()
                 "WATCHDOG_CHECK" -> syncManager.scheduleTrackingAudit()

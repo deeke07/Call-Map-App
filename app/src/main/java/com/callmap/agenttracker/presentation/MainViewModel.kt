@@ -37,10 +37,10 @@ class MainViewModel @Inject constructor(
     private fun observeSession() {
         viewModelScope.launch {
             sessionManager.getRegistration().collectLatest { registration ->
-                // Prevent initial flicker by only reacting to session changes 
+                // Prevent initial flicker by only reacting to session changes
                 // after the initial checkState() has determined the starting point.
                 val current = _startDestination.value ?: return@collectLatest
-                
+
                 if (registration == null && current == "home") {
                     // Redirect to register only if we were previously on home (logout)
                     _startDestination.value = "register"

@@ -69,6 +69,9 @@ class SyncManagerImpl @Inject constructor(
         
         // 4. Kickstart the tracking schedule
         scheduleTrackingAudit()
+
+        // 5. Schedule daily morning health check
+        alarmScheduler.scheduleDailyHealthCheck()
     }
 
     private inline fun <reified T : ListenableWorker> enqueuePeriodic(name: String, constraints: Constraints) {

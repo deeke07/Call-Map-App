@@ -19,6 +19,7 @@ class AlarmScheduler @Inject constructor(
         private const val TAG = "AlarmScheduler"
         const val ALARM_REQUEST_CODE_LOCATION = 1001
         const val ALARM_REQUEST_CODE_TRANSITION = 1002
+        const val ALARM_REQUEST_CODE_HEALTH_CHECK = 1003
         private const val PREFS_NAME = "location_alarm_prefs"
         private const val KEY_NEXT_LOCATION_WAKE_AT = "next_location_wake_at_ms"
         private const val KEY_LAST_INTERVAL_MS = "last_interval_ms"
@@ -66,6 +67,30 @@ class AlarmScheduler @Inject constructor(
     }
 
     /**
+     * Schedules a daily morning health check at 8 AM.
+     */
+    fun scheduleDailyHealthCheck() {
+        val calendar = java.util.Calendar.getInstance().apply {
+            timeInMillis = System.currentTimeMillis()
+            set(java.util.Calendar.HOUR_OF_DAY, 8)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+            
+            // If it's already past 8 AM, schedule for tomorrow
+            if (timeInMillis <= System.currentTimeMillis()) {
+                add(java.util.Calendar.DAY_OF_YEAR, 1)
+            }
+        }
+
+        val triggerAt = calendar.timeInMillis
+        val pendingIntent = healthCheckPendingIntent()
+        
+        TrackingLog.i(TAG, "Daily health check scheduled for ${java.util.Date(triggerAt)}")
+        alarmOptimizer.scheduleDozeAwareAlarm(triggerAt, pendingIntent, "daily_health_check")
+    }
+
+    /**
      * True when a location alarm is still pending (ephemeral gap between FGS cycles).
      */
     fun hasUpcomingLocationWake(graceMs: Long = 10_000L): Boolean {
@@ -87,7 +112,8 @@ class AlarmScheduler @Inject constructor(
     fun cancelAllAlarms() {
         listOf(
             transitionPendingIntent(),
-            locationWakePendingIntent()
+            locationWakePendingIntent(),
+            healthCheckPendingIntent()
         ).forEach { pi ->
             alarmOptimizer.cancelAlarm(pi, "cancel_all")
             pi.cancel()
@@ -122,6 +148,18 @@ class AlarmScheduler @Inject constructor(
         return PendingIntent.getBroadcast(
             context,
             ALARM_REQUEST_CODE_LOCATION,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun healthCheckPendingIntent(): PendingIntent {
+        val intent = Intent(context, ScheduleReceiver::class.java).apply {
+            action = ScheduleReceiver.ACTION_DAILY_CHECK
+        }
+        return PendingIntent.getBroadcast(
+            context,
+            ALARM_REQUEST_CODE_HEALTH_CHECK,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )

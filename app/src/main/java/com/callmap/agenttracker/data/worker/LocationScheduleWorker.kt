@@ -39,13 +39,11 @@ class LocationScheduleWorker @AssistedInject constructor(
                 return Result.success()
             }
 
-            val now = System.currentTimeMillis()
-            val shouldBeTracking = shouldTrackUseCase(now, settings)
-
-            TrackingLog.d(TAG, "shouldBeTracking=$shouldBeTracking")
+            val trackingEnabled = settings.trackingEnabled
+            TrackingLog.d(TAG, "trackingEnabled=$trackingEnabled")
             
-            // Start or Stop the Foreground Service
-            serviceManager.handleServiceLifecycle(shouldBeTracking)
+            // Start or Stop the Foreground Service based ONLY on trackingEnabled toggle
+            serviceManager.handleServiceLifecycle(trackingEnabled)
             
             return Result.success()
         } catch (e: Exception) {

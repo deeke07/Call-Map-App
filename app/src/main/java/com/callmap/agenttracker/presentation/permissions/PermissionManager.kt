@@ -17,17 +17,10 @@ object PermissionManager {
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.R) Manifest.permission.PROCESS_OUTGOING_CALLS else null,
         Manifest.permission.CALL_PHONE,
         Manifest.permission.READ_CALL_LOG,
-        Manifest.permission.READ_CONTACTS,
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.POST_NOTIFICATIONS
-        } else null
+        Manifest.permission.READ_CONTACTS
     )
 
-    val optionalRuntimePermissions = listOfNotNull(
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            Manifest.permission.POST_NOTIFICATIONS
-        } else null
-    )
+    val optionalRuntimePermissions = emptyList<String>()
 
 
     fun isPermissionGranted(context: Context, permission: String): Boolean {

@@ -25,7 +25,7 @@ import com.google.android.gms.location.*
 import com.google.android.gms.tasks.CancellationTokenSource
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.tasks.await
 import java.text.SimpleDateFormat
 import java.util.*
@@ -53,6 +53,16 @@ class LocationService : Service() {
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private var wakeLock: PowerManager.WakeLock? = null
     private var trackingJob: Job? = null
+
+    // Tracking parameters to avoid redundant system updates
+    private var lastIntervalMs: Long = -1L
+    private var lastPriority: Int = -1
+
+    /**
+     * Reactive trigger to force a tracking re-evaluation (e.g., when app foregrounds
+     * and permissions might have changed).
+     */
+    private val manualPoke = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     /**
      * Thread-safe state machine.
@@ -168,9 +178,6 @@ class LocationService : Service() {
             disabledEvent = EventManager.DEVICE_OFFLINE
         )
 
-        // 5. Immediate Sync Trigger
-        // If a transition was logged above, this ensures it hits the backend within the 2-minute cycle.
-        runCatching { syncManager.triggerPendingSync() }
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -199,8 +206,14 @@ class LocationService : Service() {
 
         when (action) {
             ACTION_STOP  -> initiateStop(startId)
-            ACTION_START -> startTrackingGuarded(startId)
-            else         -> startTrackingGuarded(startId)
+            ACTION_START -> {
+                serviceScope.launch { auditDeviceState() }
+                startTrackingGuarded(startId)
+            }
+            else         -> {
+                serviceScope.launch { auditDeviceState() }
+                startTrackingGuarded(startId)
+            }
         }
         return START_STICKY
     }
@@ -242,28 +255,37 @@ class LocationService : Service() {
         trackingJob?.cancel()
         trackingJob = serviceScope.launch {
             try {
-                val registration = sessionManager.getRegistration().first()
+                // Initial Audit on start
+                auditDeviceState()
 
-                if (registration == null || !registration.trackingEnabled) {
-                    withContext(Dispatchers.Main) { initiateStop(startId) }
-                    return@launch
-                }
+                // Continuous Observation of Registration and Battery
+                combine(
+                    sessionManager.getRegistration(),
+                    batteryTierFlow()
+                ) { reg, tier -> reg to tier }
+                    .collect { (registration, tier) ->
+                        if (registration == null || !registration.trackingEnabled) {
+                            Log.i(TAG, "Tracking disabled via config. Stopping.")
+                            withContext(Dispatchers.Main) { initiateStop(startId) }
+                            return@collect
+                        }
 
-                val frequencyMs = LocationFrequencyParser.fromStoredValue(registration.locationFrequency)
-                Log.i(TAG, "Tracking active — interval ${frequencyMs / 1000}s")
-                setupRetryCount = 0
-                trackingCycleCount = 0
-                restartDetector.recordTrackingState(true)
-                restartDetector.clearRestartState()
+                        // Success path: Reset setup errors
+                        setupRetryCount = 0
+                        restartDetector.recordTrackingState(true)
+                        restartDetector.clearRestartState()
 
-                // Same in-process loop for all intervals — avoids stopping FGS on long intervals.
-                runTrackingLoop(frequencyMs, startId)
+                        val intervalMs = LocationFrequencyParser.fromStoredValue(registration.locationFrequency)
+                        updateTrackingParameters(intervalMs, tier, registration.locationHighAccuracy)
+                    }
 
-            } catch (e: CancellationException) {
-                // expected on ephemeral stop
             } catch (e: Exception) {
-                handleSetupError(e, startId)
+                if (e !is CancellationException) {
+                    handleSetupError(e, startId)
+                }
             } finally {
+                // Cleanup: Stop updates if the coroutine is cancelled
+                fusedLocationClient.removeLocationUpdates(locationCallback)
                 trackingState.set(TrackingState.IDLE)
                 releaseWakeLock()
             }
@@ -295,246 +317,60 @@ class LocationService : Service() {
 
     // ── Interval strategies ───────────────────────────────────────────────────
 
-    private suspend fun runTrackingLoop(intervalMs: Long, startId: Int) {
-        var consecutiveFailures = 0
-        var failureEventLogged = false
-
+    private fun batteryTierFlow(): Flow<BatteryTier> = flow {
         while (currentCoroutineContext().isActive) {
-            val cycleStart = System.currentTimeMillis()
-            
-            // Audit device state (permissions/hardware) immediately on every cycle 
-            // to bypass WorkManager throttling and ensure 2-minute precision.
-            auditDeviceState()
+            emit(getBatteryTier())
+            delay(5 * 60_000L) // Re-evaluate battery tier every 5 mins
+        }
+    }.distinctUntilChanged()
 
-            val registration = sessionManager.getRegistration().first()
-            if (!currentCoroutineContext().isActive) break
+    private fun updateTrackingParameters(intervalMs: Long, tier: BatteryTier, highAccuracy: Boolean) {
+        val priority = when (tier) {
+            BatteryTier.NORMAL   -> if (highAccuracy) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
+            BatteryTier.LOW      -> Priority.PRIORITY_BALANCED_POWER_ACCURACY
+            BatteryTier.CRITICAL -> Priority.PRIORITY_LOW_POWER
+            BatteryTier.DEAD     -> Priority.PRIORITY_PASSIVE
+        }
 
-            if (!shouldTrackLocationUseCase(cycleStart, registration)) {
-                if (trackingState.get() != TrackingState.STOPPING) {
-                    withContext(Dispatchers.Main) { initiateStop(startId) }
-                }
-                break
-            }
-
-            trackingCycleCount++
-            if (trackingCycleCount % PERSIST_STATE_EVERY_CYCLES == 0) {
-                restartDetector.recordTrackingState(true)
-            }
-
-            val fetched = fetchWithBatteryAwareness(registration)
-            if (!currentCoroutineContext().isActive) break
-
-            if (fetched) {
-                consecutiveFailures = 0
-                failureEventLogged = false
-            } else {
-                consecutiveFailures++
-                if (consecutiveFailures >= IN_WINDOW_FAILURE_THRESHOLD && !failureEventLogged) {
-                    val failReason = when {
-                        !hasLocationPermission() -> "permission_missing"
-                        else -> "consecutive_location_failures"
-                    }
-                    logTrackingFailureInWindow(
-                        failReason,
-                        mapOf("failures" to consecutiveFailures.toString())
-                    )
-                    failureEventLogged = true
-                }
-                val retryDelay = when (consecutiveFailures) {
-                    1    -> 30_000L
-                    2    -> 60_000L
-                    else -> intervalMs
-                }
-                scheduleEphemeralWakeAndStop(retryDelay.coerceAtMost(intervalMs), startId)
-                return
-            }
-
-            val elapsed = System.currentTimeMillis() - cycleStart
-            val sleepMs = (intervalMs - elapsed).coerceAtLeast(5_000L)
-            scheduleEphemeralWakeAndStop(sleepMs, startId)
+        if (intervalMs == lastIntervalMs && priority == lastPriority) {
+            logVerbose("Tracking parameters unchanged: Interval=${intervalMs}ms, Priority=$priority")
             return
         }
+
+        lastIntervalMs = intervalMs
+        lastPriority = priority
+
+        applyLocationUpdates(intervalMs, priority)
     }
 
-    /** Stops FGS after scheduling the next alarm — no persistent agent-visible notification. */
-    private suspend fun scheduleEphemeralWakeAndStop(delayMs: Long, startId: Int) {
-        alarmScheduler.scheduleWatchdogAlarm(delayMs)
-        restartDetector.recordTrackingState(true)
-        logVerbose("Next wake in ${delayMs / 1000}s (ephemeral stop)")
-        withContext(Dispatchers.Main) { stopAfterEphemeralCycle(startId) }
-    }
+    private fun applyLocationUpdates(intervalMs: Long, priority: Int) {
+        if (!hasLocationPermission()) return
+        try {
+            // Remove previous updates before applying new ones to ensure clean state
+            fusedLocationClient.removeLocationUpdates(locationCallback)
 
-    private fun stopAfterEphemeralCycle(startId: Int) {
-        trackingState.set(TrackingState.IDLE)
-        trackingJob?.cancel()
-        releaseWakeLock()
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf(startId)
-    }
-
-    // ── Battery-aware location fetch ──────────────────────────────────────────
-
-    /**
-     * The core battery-aware fetch. This is the fix for 3% battery failures.
-     *
-     * Strategy:
-     *   NORMAL  battery: GPS chip on, high accuracy, 45s timeout
-     *   LOW     battery: Network/WiFi positioning, 60s timeout
-     *   CRITICAL battery: Low-power positioning, try lastLocation first, 90s timeout
-     *   DEAD    battery: lastLocation ONLY — no GPS scan at all
-     *
-     * Why lastLocation first at CRITICAL:
-     *   At 3% battery the OS may refuse getCurrentLocation() entirely.
-     *   lastLocation is a cached value — no hardware cost, instant return.
-     *   If it's fresh enough (< 5 min), use it directly.
-     *   If offline, we increase freshness threshold to 15 min to avoid failing scans that require network.
-     *   Only fall back to active scan if lastLocation is stale.
-     *
-     * Returns true if a point was saved, false if nothing was saved.
-     */
-    private suspend fun fetchWithBatteryAwareness(
-        registration: com.callmap.agenttracker.domain.model.RegistrationResult?
-    ): Boolean {
-        val tier = getBatteryTier()
-        val batteryLevel = getBatteryLevel()
-        val isPowerSave = (getSystemService(Context.POWER_SERVICE) as PowerManager).isPowerSaveMode
-        val isOffline = !networkObserver.isConnected()
-        val highAccuracy = registration?.locationHighAccuracy ?: true
-
-        if (!hasLocationPermission()) {
-            logMissedPoint(batteryLevel, tier, "permission_missing")
-            return false
-        }
-
-        if (!isLocationHardwareEnabled()) {
-            val last = runCatching { fusedLocationClient.lastLocation.await() }.getOrNull()
-            return if (last != null) {
-                persistLocation(last, batteryLevel, "lastLocation_gps_off", allowLenient = true)
-            } else {
-                logMissedPoint(batteryLevel, tier, "gps_disabled_no_cache")
-                false
-            }
-        }
-
-        if (tier == BatteryTier.DEAD) {
-            val last = runCatching { fusedLocationClient.lastLocation.await() }.getOrNull()
-            return if (last != null) {
-                persistLocation(last, batteryLevel, "lastLocation_dead_battery", allowLenient = true)
-            } else {
-                logMissedPoint(batteryLevel, tier, "dead_battery_no_fix")
-                false
-            }
-        }
-
-        if (tier == BatteryTier.CRITICAL) {
-            val last = runCatching { fusedLocationClient.lastLocation.await() }.getOrNull()
-            if (last != null) {
-                val ageMs = System.currentTimeMillis() - last.time
-                val freshnessThreshold = if (isOffline) 15 * 60 * 1000L else 5 * 60 * 1000L
-                if (ageMs < freshnessThreshold) {
-                    val source = if (isOffline) "lastLocation_critical_offline" else "lastLocation_critical_battery"
-                    if (persistLocation(last, batteryLevel, source, allowLenient = true)) return true
-                }
-            }
-        }
-
-        return performActiveScan(tier, batteryLevel, isPowerSave, isOffline, highAccuracy)
-    }
-
-    /**
-     * Performs an active location scan with parameters tuned to battery tier.
-     *
-     * Priority mapping:
-     *   NORMAL   → PRIORITY_HIGH_ACCURACY      (GPS chip)
-     *   LOW      → PRIORITY_BALANCED_POWER     (WiFi + cell, no GPS chip)
-     *   CRITICAL → PRIORITY_LOW_POWER          (cell towers only)
-     *
-     * Timeout mapping:
-     *   NORMAL  → 45s
-     *   LOW     → 60s  (network positioning can be slower than GPS)
-     *   CRITICAL→ 90s  (cell positioning may take longer at system-throttled state)
-     */
-    private suspend fun performActiveScan(
-        tier: BatteryTier,
-        batteryLevel: Int,
-        isPowerSave: Boolean,
-        isOffline: Boolean,
-        highAccuracy: Boolean
-    ): Boolean {
-        val (priority, timeoutMs) = when (tier) {
-            BatteryTier.NORMAL   -> if (highAccuracy) {
-                Pair(Priority.PRIORITY_HIGH_ACCURACY, 45_000L)
-            } else {
-                Pair(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 60_000L)
-            }
-            BatteryTier.LOW      -> Pair(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 60_000L)
-            BatteryTier.CRITICAL -> Pair(Priority.PRIORITY_LOW_POWER, 90_000L)
-            BatteryTier.DEAD     -> return false
-        }
-
-        val effectivePriority = if (isPowerSave && tier == BatteryTier.NORMAL && highAccuracy) {
-            Priority.PRIORITY_BALANCED_POWER_ACCURACY
-        } else priority
-
-        val fetchLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LocationService::FetchLock")
-        
-        val cts = CancellationTokenSource()
-        runCatching { fetchLock.acquire(timeoutMs + 10_000L) }
-
-        return try {
-            val request = CurrentLocationRequest.Builder()
-                .setPriority(effectivePriority)
-                .setDurationMillis(timeoutMs) // System-level timeout to prevent "late to expire"
-                .setMaxUpdateAgeMillis(if (isOffline) 60_000L else 30_000L)
+            val request = LocationRequest.Builder(priority, intervalMs)
+                .setMinUpdateIntervalMillis(intervalMs / 2)
+                .setWaitForAccurateLocation(false)
                 .build()
 
-            var location = try {
-                withTimeout(timeoutMs + 5000L) { // Slightly longer than request timeout
-                    fusedLocationClient.getCurrentLocation(request, cts.token).await()
-                }
-            } catch (e: TimeoutCancellationException) {
-                logVerbose("Active scan timed out after ${timeoutMs}ms")
-                null
-            }
-
-            // Fallback chain on timeout or failure
-            if (location == null) {
-                location = runCatching {
-                    fusedLocationClient.lastLocation.await()
-                }.getOrNull()
-            }
-
-            if (location != null) {
-                val source = if (location.provider == null) "active_scan_fallback_$tier" else "active_scan_$tier"
-                persistLocation(location, batteryLevel, source, allowLenient = false, isDesperate = isOffline)
-            } else {
-                val desperateLast = runCatching { fusedLocationClient.lastLocation.await() }.getOrNull()
-                if (desperateLast != null) {
-                    persistLocation(
-                        desperateLast,
-                        batteryLevel,
-                        "desperate_fallback_offline_$isOffline",
-                        allowLenient = true,
-                        isDesperate = isOffline
-                    )
-                } else {
-                    logMissedPoint(batteryLevel, tier, "no_fix_active_scan_offline_$isOffline")
-                    false
-                }
-            }
-
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: SecurityException) {
-            logMissedPoint(batteryLevel, tier, "permission_revoked")
-            false
+            fusedLocationClient.requestLocationUpdates(
+                request,
+                locationCallback,
+                Looper.getMainLooper()
+            )
+            Log.i(TAG, "LOCATION_UPDATES_ACTIVE: Interval=${intervalMs/1000}s, Priority=$priority")
         } catch (e: Exception) {
-            logVerbose("Scan error: ${e.message}")
-            false
-        } finally {
-            cts.cancel() // CRITICAL: Stop the system-level request immediately
-            if (fetchLock.isHeld) runCatching { fetchLock.release() }
+            Log.e(TAG, "Failed to apply location updates: ${e.message}")
+        }
+    }
+
+    private val locationCallback = object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) {
+            val location = result.lastLocation ?: return
+            serviceScope.launch {
+                persistLocation(location, getBatteryLevel(), "continuous_callback", allowLenient = false)
+            }
         }
     }
 
@@ -557,6 +393,8 @@ class LocationService : Service() {
         allowLenient: Boolean,
         isDesperate: Boolean = false
     ): Boolean {
+        Log.d(TAG, "LOCATION_RECEIVED: Source=$source, Lat=${location.latitude}, Lon=${location.longitude}, Accuracy=${location.accuracy}")
+        
         val quality = LocationQualityGate.validate(location, allowLenient, isDesperate)
         if (!quality.accepted) {
             if (!allowLenient && !isDesperate) {
@@ -564,6 +402,17 @@ class LocationService : Service() {
             }
             return false
         }
+
+        // Active Window Persistence Check
+        val now = System.currentTimeMillis()
+        val registration = sessionManager.getRegistration().first()
+        val inWindow = shouldTrackLocationUseCase(now, registration)
+
+        if (!inWindow) {
+            Log.i(TAG, "LOCATION_DISCARDED_OUTSIDE_ACTIVE_WINDOW: Point at $now discarded (Window: ${registration?.trackingStartTime}-${registration?.trackingEndTime})")
+            return true // Return true so the loop considers the "fetch" successful and doesn't trigger failure retries
+        }
+
         return saveToRoomSafely(location.latitude, location.longitude, battery, source)
     }
 
@@ -575,7 +424,7 @@ class LocationService : Service() {
     ): Boolean {
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         try {
-            Log.w(TAG, "Location saved: ($lat,$lon)")
+            Log.w(TAG, "LOCATION_SAVED: ($lat,$lon) via $source")
             repository.saveLocation(
                 LocationEntity(
                     latitude     = lat,
@@ -626,6 +475,10 @@ class LocationService : Service() {
         alarmScheduler.clearLocationWakeSchedule()
         restartDetector.recordTrackingState(false)
         trackingJob?.cancel()
+        
+        // Stop persistent location updates
+        fusedLocationClient.removeLocationUpdates(locationCallback)
+
         releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         if (startId != null) stopSelf(startId) else stopSelf()
@@ -635,26 +488,11 @@ class LocationService : Service() {
 
     private suspend fun handleSetupError(e: Exception, startId: Int) {
         setupRetryCount++
-        Log.e(TAG, "Setup error ($setupRetryCount/$MAX_SETUP_RETRIES): ${e.message}")
+        Log.e(TAG, "Setup error ($setupRetryCount): ${e.message}. Retrying with backoff...")
 
-        if (setupRetryCount >= MAX_SETUP_RETRIES) {
-            setupRetryCount = 0
-            val registration = sessionManager.getRegistration().first()
-            val inWindow = registration?.trackingEnabled == true &&
-                shouldTrackLocationUseCase(System.currentTimeMillis(), registration)
-            if (inWindow) {
-                logTrackingFailureInWindow(
-                    "setup_retry_exhausted",
-                    mapOf("error" to (e.message ?: "unknown"))
-                )
-            }
-            trackingState.set(TrackingState.IDLE)
-            withContext(Dispatchers.Main) { initiateStop(startId) }
-            return
-        }
-
-        val backoffMs = 60_000L * setupRetryCount
+        val backoffMs = (60_000L * setupRetryCount).coerceAtMost(300_000L)
         delay(backoffMs)
+
         trackingState.set(TrackingState.IDLE)
         withContext(Dispatchers.Main) { startTrackingGuarded(startId) }
     }

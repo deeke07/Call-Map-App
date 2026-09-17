@@ -47,6 +47,9 @@ class FetchConfigUseCase @Inject constructor(
                         deviceStatus = settings?.deviceStatus ?: currentRegistration.deviceStatus
                     )
 
+                    sessionManager.saveRegistration(updatedRegistration)
+                    Log.i("FetchConfigUseCase", "Config updated: $updatedRegistration")
+
                     // Critical: Check if device is disabled
                     if (!updatedRegistration.deviceStatus) {
                         Log.w("FetchConfigUseCase", "Device status is FALSE. Triggering emergency logout.")
@@ -54,9 +57,7 @@ class FetchConfigUseCase @Inject constructor(
                         return
                     }
 
-                    sessionManager.saveRegistration(updatedRegistration)
-                    Log.i("FetchConfigUseCase", "Config updated: $updatedRegistration")
-                    
+
                     // Acknowledge settings received
                     try {
                         Log.d("FetchConfigUseCase", "Sending acknowledgment for UUID: ${updatedRegistration.deviceUuid}")

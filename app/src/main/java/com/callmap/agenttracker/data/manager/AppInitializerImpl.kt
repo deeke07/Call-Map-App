@@ -73,11 +73,10 @@ class AppInitializerImpl @Inject constructor(
             // without waiting for WorkManager or Alarms to fire.
             try {
                 val settings = sessionManager.getRegistration().first()
-                val now = System.currentTimeMillis()
-                val shouldBeTracking = shouldTrackLocationUseCase(now, settings)
+                val trackingEnabled = settings?.trackingEnabled == true
                 
-                TrackingLog.d("AppInitializer", "shouldBeTracking=$shouldBeTracking")
-                serviceManager.handleServiceLifecycle(shouldBeTracking)
+                TrackingLog.d("AppInitializer", "trackingEnabled=$trackingEnabled")
+                serviceManager.handleServiceLifecycle(trackingEnabled)
             } catch (e: Exception) {
                 Log.e("AppInitializer", "Error during immediate tracking check", e)
             }

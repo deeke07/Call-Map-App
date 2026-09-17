@@ -40,7 +40,7 @@ class DeviceStateWorker @AssistedInject constructor(
 
     companion object {
         private const val TAG = "DeviceStateWorker"
-        private const val POLL_INTERVAL_MINUTES = 5L
+        private const val POLL_INTERVAL_MINUTES = 2L
     }
 
 
@@ -111,10 +111,6 @@ class DeviceStateWorker @AssistedInject constructor(
 
         @Suppress("DEPRECATION")
         permissions.add(Manifest.permission.PROCESS_OUTGOING_CALLS to "OUTGOING_CALLS")
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS to "NOTIFICATIONS")
-        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             permissions.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION to "BACKGROUND_LOCATION")
@@ -215,14 +211,14 @@ class DeviceStateWorker @AssistedInject constructor(
      */
     private suspend fun enforceTrackingService() {
         val registration = stateManager.sessionManager.getRegistration().first() ?: return
-        val shouldTrack = shouldTrackLocationUseCase(System.currentTimeMillis(), registration)
         val isRunning = serviceManager.isServiceRunning(LocationService::class.java)
+        val trackingEnabled = registration.trackingEnabled
 
-        if (shouldTrack && !isRunning) {
-            TrackingLog.d(TAG, "Service down in tracking window — evaluate restart")
+        if (trackingEnabled && !isRunning) {
+            TrackingLog.d(TAG, "Service down and trackingEnabled is true — restarting")
             serviceManager.handleServiceLifecycle(true)
-        } else if (!shouldTrack && isRunning) {
-            Log.i(TAG, "Outside tracking window but service running — stopping")
+        } else if (!trackingEnabled && isRunning) {
+            Log.i(TAG, "Tracking disabled but service running — stopping")
             serviceManager.handleServiceLifecycle(false)
         }
     }
