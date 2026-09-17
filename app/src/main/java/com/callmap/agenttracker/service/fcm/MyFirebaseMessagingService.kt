@@ -39,6 +39,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     companion object {
         private const val CHANNEL_ID = "fcm_default_v1"
         private const val NOTIFICATION_ID = 1001
+
+        // Temporary diagnostic switch: prevent settings-change pushes from fetching
+        // device_status and initiating the remote logout flow during reboot testing.
+        private const val FCM_SETTINGS_REFRESH_ENABLED = false
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -61,7 +65,11 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             }
             "device_settings_changed" -> {
                 showNotification(title, body)
-                handleSettingsChange()
+                if (FCM_SETTINGS_REFRESH_ENABLED) {
+                    handleSettingsChange()
+                } else {
+                    Log.w("FCM", "Settings refresh is temporarily disabled for testing.")
+                }
             }
             else -> {
                 // For any other data messages, show the notification

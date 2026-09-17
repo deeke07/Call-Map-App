@@ -16,6 +16,12 @@ class FetchConfigUseCase @Inject constructor(
     private val syncManager: SyncManager,
     private val logoutUseCase: LogoutUseCase
 ) {
+    companion object {
+        // Temporary diagnostic switch: keep the registration active when the backend
+        // reports device_status=false so battery-death/reboot behavior can be isolated.
+        private const val REMOTE_DEVICE_STATUS_LOGOUT_ENABLED = false
+    }
+
     suspend operator fun invoke() {
         Log.i("FetchConfigUseCase", "Fetching configuration...")
         try {
@@ -52,9 +58,16 @@ class FetchConfigUseCase @Inject constructor(
 
                     // Critical: Check if device is disabled
                     if (!updatedRegistration.deviceStatus) {
-                        Log.w("FetchConfigUseCase", "Device status is FALSE. Triggering emergency logout.")
-                        logoutUseCase()
-                        return
+                        if (REMOTE_DEVICE_STATUS_LOGOUT_ENABLED) {
+                            Log.w("FetchConfigUseCase", "Device status is FALSE. Triggering emergency logout.")
+                            logoutUseCase()
+                            return
+                        }
+
+                        Log.w(
+                            "FetchConfigUseCase",
+                            "Device status is FALSE, but remote logout is temporarily disabled for testing."
+                        )
                     }
 
 
