@@ -98,6 +98,10 @@ class AgentTrackerApp : Application(), Configuration.Provider, ImageLoaderFactor
 
             override fun onLost(network: Network) {
                 appScope.launch {
+                    if (getSystemService(UserManager::class.java)?.isUserUnlocked != true) {
+                        Log.i("AgentTrackerApp", "Network lost before unlock; deferring session access")
+                        return@launch
+                    }
                     stateManager.trackBinaryState(
                         stateKey = "network_status",
                         isEnabled = false,

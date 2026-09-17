@@ -1,29 +1,39 @@
 package com.callmap.agenttracker.presentation.permissions
 
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.PowerManager
 import android.provider.Settings
-import android.view.accessibility.AccessibilityManager
+import com.callmap.agenttracker.service.MyAccessibilityService
 
 object SpecialPermissionManager {
 
     fun isAccessibilityServiceEnabled(context: Context, service: Class<*>): Boolean {
-        val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-        val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-        for (enabledService in enabledServices) {
-            val enabledServiceInfo = enabledService.resolveInfo.serviceInfo
-            if (enabledServiceInfo.packageName == context.packageName &&
-                enabledServiceInfo.name == service.name
-            ) {
-                return true
-            }
+        return isAccessibilityServiceSelected(context, service) == true
+    }
+
+    private fun isAccessibilityServiceSelected(context: Context, service: Class<*>): Boolean? {
+        return try {
+            val component = ComponentName(context, service)
+            val selectedServices = Settings.Secure.getString(
+                context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ).orEmpty()
+            selectedServices.split(':').any { ComponentName.unflattenFromString(it) == component }
+        } catch (e: Exception) {
+            android.util.Log.w("AccessibilityStatus", "Cannot read accessibility setting", e)
+            null
         }
-        return false
+    }
+
+    fun accessibilityStatus(context: Context): AccessibilityStatus {
+        return AccessibilityStatus.resolve(
+            selected = isAccessibilityServiceSelected(context, MyAccessibilityService::class.java),
+            connected = MyAccessibilityService.isConnected
+        )
     }
 
     fun openAccessibilitySettings(context: Context) {

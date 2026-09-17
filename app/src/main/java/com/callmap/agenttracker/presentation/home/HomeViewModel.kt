@@ -63,8 +63,13 @@ class HomeViewModel @Inject constructor(
         
         _state.update { it.copy(
             isLocationEnabled = isHardwareEnabled,
-            isLocationPermissionGranted = isPermissionGranted
+            isLocationPermissionGranted = isPermissionGranted,
+            accessibilityStatus = SpecialPermissionManager.accessibilityStatus(context)
         ) }
+    }
+
+    fun openAccessibilitySettings() {
+        SpecialPermissionManager.openAccessibilitySettings(context)
     }
 
     fun openLocationSettings() {

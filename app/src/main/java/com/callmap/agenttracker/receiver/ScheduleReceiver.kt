@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
+import android.os.UserManager
 import android.util.Log
 import com.callmap.agenttracker.domain.manager.SyncManager
 import com.callmap.agenttracker.service.LocationService
@@ -29,6 +30,10 @@ class ScheduleReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
+        if (context.getSystemService(UserManager::class.java)?.isUserUnlocked != true) {
+            Log.i(TAG, "Deferring schedule work until user unlock; boot receiver will resume it")
+            return
+        }
         val action = intent.action
         TrackingLog.d(TAG, "Broadcast: $action")
 

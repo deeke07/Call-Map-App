@@ -1,6 +1,8 @@
 package com.callmap.agenttracker.data.manager
 
 import android.content.Context
+import android.os.UserManager
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
@@ -10,6 +12,9 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,6 +24,22 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 class SessionManagerImpl @Inject constructor(
     @param:ApplicationContext private val context: Context
 ) : SessionManager {
+
+    private val unlockGate = UserUnlockGate(isUnlocked = {
+        context.getSystemService(UserManager::class.java)?.isUserUnlocked == true
+    })
+    private val loggedStorageReady = AtomicBoolean(false)
+
+    private suspend fun unlockedStore(): DataStore<Preferences> = unlockGate.access {
+        if (loggedStorageReady.compareAndSet(false, true)) {
+            Log.i("SessionManager", "Opening session storage after user unlock")
+        }
+        context.dataStore
+    }
+
+    // The flow is lazy: neither the delegate nor its file may be opened in Direct Boot.
+    // Reading an inaccessible file too early can cache empty preferences for this process.
+    private val preferences: Flow<Preferences> = flow { emitAll(unlockedStore().data) }
 
     companion object {
         private val DEVICE_UUID = stringPreferencesKey("device_uuid")
@@ -45,7 +66,7 @@ class SessionManagerImpl @Inject constructor(
     }
 
     override suspend fun saveRegistration(registration: RegistrationResult) {
-        context.dataStore.edit { prefs ->
+        unlockedStore().edit { prefs ->
             prefs[DEVICE_UUID] = registration.deviceUuid
             prefs[DEVICE_NAME] = registration.deviceName
             prefs[RECORDING_ENABLED] = registration.recordingEnabled
@@ -67,7 +88,7 @@ class SessionManagerImpl @Inject constructor(
     }
 
     override fun getRegistration(): Flow<RegistrationResult?> {
-        return context.dataStore.data.map { prefs ->
+        return preferences.map { prefs ->
             val uuid = prefs[DEVICE_UUID] ?: return@map null
             RegistrationResult(
                 deviceUuid = uuid,
@@ -92,19 +113,19 @@ class SessionManagerImpl @Inject constructor(
     }
 
     override suspend fun clearSession() {
-        context.dataStore.edit { it.clear() }
+        unlockedStore().edit { it.clear() }
     }
 
     override suspend fun saveBaseUrl(url: String) {
-        context.dataStore.edit { it[BASE_URL] = url }
+        unlockedStore().edit { it[BASE_URL] = url }
     }
 
     override fun getBaseUrl(): Flow<String?> {
-        return context.dataStore.data.map { it[BASE_URL] }
+        return preferences.map { it[BASE_URL] }
     }
 
     override fun getDeviceStates(): Flow<Map<String, String>> {
-        return context.dataStore.data.map { prefs ->
+        return preferences.map { prefs ->
             prefs.asMap()
                 .filterKeys { it.name.startsWith(STATE_PREFIX) }
                 .mapKeys { it.key.name.removePrefix(STATE_PREFIX) }
@@ -114,30 +135,30 @@ class SessionManagerImpl @Inject constructor(
 
     override suspend fun updateDeviceState(key: String, value: String) {
         val prefKey = stringPreferencesKey(STATE_PREFIX + key)
-        context.dataStore.edit { prefs ->
+        unlockedStore().edit { prefs ->
             prefs[prefKey] = value
         }
     }
 
     override suspend fun saveSimUuid(simSlot: Int, uuid: String) {
         val key = stringPreferencesKey("sim_uuid_$simSlot")
-        context.dataStore.edit { prefs ->
+        unlockedStore().edit { prefs ->
             prefs[key] = uuid
         }
     }
 
     override suspend fun getSimUuid(simSlot: Int): String? {
         val key = stringPreferencesKey("sim_uuid_$simSlot")
-        return context.dataStore.data.map { it[key] }.firstOrNull()
+        return preferences.map { it[key] }.firstOrNull()
     }
 
     override suspend fun saveSimSubIdMapping(subId: String, simSlot: Int) {
         val key = stringPreferencesKey("sub_mapping_$subId")
-        context.dataStore.edit { it[key] = simSlot.toString() }
+        unlockedStore().edit { it[key] = simSlot.toString() }
     }
 
     override suspend fun getSlotFromSubIdMapping(subId: String): Int? {
         val key = stringPreferencesKey("sub_mapping_$subId")
-        return context.dataStore.data.map { it[key]?.toIntOrNull() }.firstOrNull()
+        return preferences.map { it[key]?.toIntOrNull() }.firstOrNull()
     }
 }

@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
                         val currentRoute = navController.currentBackStackEntry?.destination?.route
                         if (currentRoute != null && currentRoute != destination) {
                             // If permissions are revoked or we need to go to register, force it
-                            if (destination == "permissions" || destination == "register" || destination == "welcome") {
+                            if (destination == "permissions" || destination == "register" || destination == "welcome" || destination == "home") {
                                 navController.navigate(destination) {
                                     popUpTo(0) { inclusive = true }
                                 }

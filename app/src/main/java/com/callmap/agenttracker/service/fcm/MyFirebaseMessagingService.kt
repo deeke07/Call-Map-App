@@ -40,9 +40,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         private const val CHANNEL_ID = "fcm_default_v1"
         private const val NOTIFICATION_ID = 1001
 
-        // Temporary diagnostic switch: prevent settings-change pushes from fetching
-        // device_status and initiating the remote logout flow during reboot testing.
-        private const val FCM_SETTINGS_REFRESH_ENABLED = false
+        // Restore settings refresh, including the administrator's remote-logout switch.
+        private const val FCM_SETTINGS_REFRESH_ENABLED = true
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

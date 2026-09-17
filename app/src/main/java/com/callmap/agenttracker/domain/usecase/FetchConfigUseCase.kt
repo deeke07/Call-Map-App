@@ -17,9 +17,9 @@ class FetchConfigUseCase @Inject constructor(
     private val logoutUseCase: LogoutUseCase
 ) {
     companion object {
-        // Temporary diagnostic switch: keep the registration active when the backend
-        // reports device_status=false so battery-death/reboot behavior can be isolated.
-        private const val REMOTE_DEVICE_STATUS_LOGOUT_ENABLED = false
+        // Re-enabled for recovery testing with the first-unlock storage guard retained.
+        // Backend device_status is the remote-logout switch, not online/offline status.
+        private const val REMOTE_DEVICE_STATUS_LOGOUT_ENABLED = true
     }
 
     suspend operator fun invoke() {

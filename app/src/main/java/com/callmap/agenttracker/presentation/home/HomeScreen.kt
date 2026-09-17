@@ -1,6 +1,8 @@
 package com.callmap.agenttracker.presentation.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,9 +30,13 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
+import com.callmap.agenttracker.presentation.permissions.AccessibilityStatus
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
@@ -54,7 +60,8 @@ import com.callmap.agenttracker.ui.theme.AgentTrackerMobileAppTheme
 @Composable
 fun HomeContent(
     homeState: HomeState,
-    onOpenLocationSettings: () -> Unit = {}
+    onOpenLocationSettings: () -> Unit = {},
+    onOpenAccessibilitySettings: () -> Unit = {}
 ) {
     val data = homeState.registration
 
@@ -93,6 +100,7 @@ fun HomeContent(
                     .fillMaxSize()
                     .then(if (homeState.isLoading) Modifier else Modifier.statusBarsPadding())
                     .navigationBarsPadding()
+                    .verticalScroll(rememberScrollState())
                     .padding(horizontal = 24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -276,6 +284,41 @@ fun HomeContent(
                     }
                 }
 
+                if (homeState.accessibilityStatus != AccessibilityStatus.CONNECTED) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        color = SurfaceDark,
+                        border = BorderStroke(1.dp, BorderDark)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                text = when (homeState.accessibilityStatus) {
+                                    AccessibilityStatus.DISABLED -> "Accessibility needs attention"
+                                    AccessibilityStatus.RECONNECTING -> "Accessibility reconnecting"
+                                    else -> "Checking accessibility"
+                                },
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = when (homeState.accessibilityStatus) {
+                                    AccessibilityStatus.DISABLED -> "You are still signed in. Enable CallMap in Accessibility settings to restore its additional background recovery support."
+                                    AccessibilityStatus.RECONNECTING -> "You are still signed in. Accessibility is enabled; waiting for Android to reconnect it. If this persists, check CallMap in Accessibility settings."
+                                    else -> "You are still signed in. Waiting for accessibility status."
+                                },
+                                color = TextSecondary,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            TextButton(onClick = onOpenAccessibilitySettings) {
+                                Text("Accessibility settings", color = NeonLime)
+                            }
+                        }
+                    }
+                }
+
                 if (!homeState.isLocationEnabled || !homeState.isLocationPermissionGranted) {
                     Spacer(modifier = Modifier.height(16.dp))
                     Surface(
@@ -318,7 +361,7 @@ fun HomeContent(
                     }
                 }
 
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.height(24.dp))
             }
         }
     }
@@ -353,6 +396,16 @@ fun HomeScreen(
     val homeState by viewModel.state.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    // Binding can finish after ON_RESUME. Refresh while visible without restarting services.
+    LaunchedEffect(viewModel, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                viewModel.checkLocationStatus()
+                delay(2_000)
+            }
+        }
+    }
+
     // Refresh status and config when returning to app
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -369,8 +422,8 @@ fun HomeScreen(
 
     HomeContent(
         homeState = homeState,
-        onOpenLocationSettings = { viewModel.openLocationSettings() }
+        onOpenLocationSettings = { viewModel.openLocationSettings() },
+        onOpenAccessibilitySettings = { viewModel.openAccessibilitySettings() }
     )
 }
-
 

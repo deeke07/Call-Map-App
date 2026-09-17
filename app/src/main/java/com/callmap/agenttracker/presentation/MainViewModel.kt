@@ -111,32 +111,22 @@ class MainViewModel @Inject constructor(
 
     fun checkState(context: Context) {
         viewModelScope.launch {
-            // Immediate state logging to catch revoked permissions
-            logPermissionStates(context)
-
             val registration = sessionManager.getRegistration().first()
-            val allPermissionsGranted = areRequiredPermissionsGranted(context)
             val current = _startDestination.value
-
-            val next = if (registration != null) {
-                if (allPermissionsGranted) "home" else "permissions"
-            } else {
-                // Not registered yet
-                if (allPermissionsGranted) {
-                    "register"
-                } else {
-                    // If we are already in the permissions or register flow, don't jump back to welcome
-                    if (current == "permissions" || current == "register") {
-                        current
-                    } else {
-                        "welcome"
-                    }
-                }
-            }
+            val next = startupDestination(
+                registered = registration != null,
+                corePermissionsGranted = areRequiredPermissionsGranted(context, includeAccessibility = false),
+                accessibilitySelected = SpecialPermissionManager.isAccessibilityServiceEnabled(
+                    context, MyAccessibilityService::class.java
+                ),
+                current = current
+            )
 
             if (current != next) {
                 _startDestination.value = next
             }
+            // Network delivery of diagnostic events must not delay session routing.
+            logPermissionStates(context)
         }
     }
 
@@ -150,13 +140,13 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    private fun areRequiredPermissionsGranted(context: Context): Boolean {
+    private fun areRequiredPermissionsGranted(context: Context, includeAccessibility: Boolean = true): Boolean {
         val runtimeGranted = PermissionManager.areAllPermissionsGranted(context, PermissionManager.runtimePermissions)
         val accessibilityEnabled = SpecialPermissionManager.isAccessibilityServiceEnabled(context, MyAccessibilityService::class.java)
         val batteryIgnored = SpecialPermissionManager.isBatteryOptimizationIgnored(context)
         val allFilesAccess = SpecialPermissionManager.isManageExternalStorageGranted(context)
         val gpsEnabled = SpecialPermissionManager.isLocationHardwareEnabled(context)
 
-        return runtimeGranted && accessibilityEnabled && batteryIgnored && allFilesAccess && gpsEnabled
+        return runtimeGranted && (!includeAccessibility || accessibilityEnabled) && batteryIgnored && allFilesAccess && gpsEnabled
     }
 }
