@@ -20,34 +20,34 @@ class LogoutUseCase @Inject constructor(
 
         try {
             val registration = sessionManager.getRegistration().first()
-            if (registration != null && !registration.deviceStatus) {
-                // 1. Mark device as offline on backend
+            
+            // 1. Mark device as offline on backend if we have a registration
+            registration?.let {
                 Log.d("LogoutUseCase", "Marking device offline on backend...")
-                authRepository.markDeviceOffline(registration.deviceUuid)
-
-                // 2. Clear FCM token (optional but recommended)
-                try {
-                    FirebaseMessaging.getInstance().deleteToken()
-                    Log.d("LogoutUseCase", "FCM Token deleted")
-                } catch (e: Exception) {
-                    Log.e("LogoutUseCase", "Failed to delete FCM token", e)
-                }
-
-
-                // 3. Stop all background services
-                Log.d("LogoutUseCase", "Stopping all services...")
-                serviceManager.stopServices()
-
-                // 4. Cancel all background workers and alarms
-                Log.d("LogoutUseCase", "Cancelling all background work...")
-                syncManager.cancelAllSync()
-
-                // 5. Clear all session data (this triggers UI redirect via StateFlow)
-                Log.d("LogoutUseCase", "Clearing session data...")
-                sessionManager.clearSession()
-
-                Log.i("LogoutUseCase", "Logout and cleanup completed successfully.")
+                runCatching { authRepository.markDeviceOffline(it.deviceUuid) }
             }
+
+            // 2. Clear FCM token (optional but recommended)
+            try {
+                FirebaseMessaging.getInstance().deleteToken()
+                Log.d("LogoutUseCase", "FCM Token deleted")
+            } catch (e: Exception) {
+                Log.e("LogoutUseCase", "Failed to delete FCM token", e)
+            }
+
+            // 3. Stop all background services
+            Log.d("LogoutUseCase", "Stopping all services...")
+            serviceManager.stopServices()
+
+            // 4. Cancel all background workers and alarms
+            Log.d("LogoutUseCase", "Cancelling all background work...")
+            syncManager.cancelAllSync()
+
+            // 5. Clear all session data (this triggers UI redirect via StateFlow)
+            Log.d("LogoutUseCase", "Clearing session data...")
+            sessionManager.clearSession()
+
+            Log.i("LogoutUseCase", "Logout and cleanup completed successfully.")
 
         } catch (e: Exception) {
             Log.e("LogoutUseCase", "Error during logout process", e)
