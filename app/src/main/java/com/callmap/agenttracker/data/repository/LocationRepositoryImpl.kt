@@ -155,6 +155,7 @@ class LocationRepositoryImpl @Inject constructor(
             deviceUuid = registration.deviceUuid,
             locations = batch.map {
                 LocationItem(
+                    clientEventId = it.clientEventId,
                     latitude = it.latitude,
                     longitude = it.longitude,
                     batteryLevel = it.batteryLevel,

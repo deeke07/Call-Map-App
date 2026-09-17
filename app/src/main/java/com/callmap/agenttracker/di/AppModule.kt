@@ -141,6 +141,7 @@ object AppModule {
             AppDatabase::class.java,
             AppDatabase.DATABASE_NAME
         )
+            .addMigrations(AppDatabase.MIGRATION_7_8)
             .build()
     }
 

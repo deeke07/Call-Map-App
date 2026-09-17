@@ -100,7 +100,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     private fun makeCall(phoneNumber: String, metaData: String?) {
         try {
             if (metaData != null) {
-                CallReceiver.setPendingDialMetaData(phoneNumber, metaData)
+                CallReceiver.setPendingDialMetaData(applicationContext, phoneNumber, metaData)
             }
             
             val intent = Intent(Intent.ACTION_CALL).apply {

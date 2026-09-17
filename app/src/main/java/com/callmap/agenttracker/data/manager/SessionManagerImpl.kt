@@ -66,6 +66,7 @@ class SessionManagerImpl @Inject constructor(
     }
 
     override suspend fun saveRegistration(registration: RegistrationResult) {
+        unlockGate.access { com.callmap.agenttracker.data.local.CallCaptureJournal.begin(context, registration.deviceUuid) }
         unlockedStore().edit { prefs ->
             prefs[DEVICE_UUID] = registration.deviceUuid
             prefs[DEVICE_NAME] = registration.deviceName
@@ -114,6 +115,7 @@ class SessionManagerImpl @Inject constructor(
 
     override suspend fun clearSession() {
         unlockedStore().edit { it.clear() }
+        com.callmap.agenttracker.data.local.CallCaptureJournal.clear(context)
     }
 
     override suspend fun saveBaseUrl(url: String) {

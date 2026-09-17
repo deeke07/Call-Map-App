@@ -18,12 +18,19 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.Collections
 import javax.inject.Inject
+import com.callmap.agenttracker.data.local.CallCaptureJournal
+import com.callmap.agenttracker.data.worker.CallReconciliationWorker
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 
 @AndroidEntryPoint
 class CallReceiver : BroadcastReceiver() {
 
     @Inject
     lateinit var sessionManager: SessionManager
+
+    private var recordingAllowed = false
 
     companion object {
         private const val TAG = "CallReceiver"
@@ -36,10 +43,10 @@ class CallReceiver : BroadcastReceiver() {
         private val processedCallIds = Collections.synchronizedSet(mutableSetOf<String>())
 
         // Metadata for the next outgoing call triggered via FCM
-        private var pendingDialMetaData: Pair<String, String>? = null
+        private val receiverMutex = Mutex()
 
-        fun setPendingDialMetaData(number: String, metaData: String) {
-            pendingDialMetaData = number to metaData
+        fun setPendingDialMetaData(context: Context, number: String, metaData: String) {
+            CallCaptureJournal.setDial(context, number, metaData)
         }
 
         data class CallData(
@@ -53,12 +60,53 @@ class CallReceiver : BroadcastReceiver() {
             var wasOnHold: Boolean = false,
             var serviceInstanceId: Long = 0,
             var isSaved: Boolean = false,
-            var metaData: String? = null
+            var metaData: String? = null,
+            var recordingAllowed: Boolean = true
         )
     }
 
     @RequiresApi(Build.VERSION_CODES.O)
     override fun onReceive(context: Context, intent: Intent) {
+        if (context.getSystemService(android.os.UserManager::class.java)?.isUserUnlocked != true) return
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                withTimeout(8_000) {
+                    receiverMutex.withLock {
+                        val registration = sessionManager.getRegistration().first() ?: return@withLock
+                        recordingAllowed = registration.recordingEnabled
+                        CallCaptureJournal.begin(context, registration.deviceUuid)
+                        val saved = CallCaptureJournal.read(context)
+                        currentCallData = saved.current
+                        interruptedCalls.clear()
+                        interruptedCalls.addAll(saved.interrupted)
+                        lastCallState = saved.lastState
+                        processedCallIds.clear()
+                        processedCallIds.addAll(saved.processed)
+                        try {
+                            handleReceive(context, intent)
+                        } finally {
+                            persist(context)
+                            CallReconciliationWorker.enqueue(context)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Call transition failed; system CallLog reconciliation will retry", e)
+                CallReconciliationWorker.enqueue(context)
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+
+    private fun persist(context: Context) {
+        CallCaptureJournal.save(context, CallCaptureJournal.Snapshot(
+            currentCallData, interruptedCalls.toList(), lastCallState, processedCallIds.toSet()
+        ))
+    }
+
+    private fun handleReceive(context: Context, intent: Intent) {
         when (intent.action) {
             Intent.ACTION_NEW_OUTGOING_CALL -> {
                 val number = intent.getStringExtra(Intent.EXTRA_PHONE_NUMBER) ?: "Unknown"
@@ -70,15 +118,11 @@ class CallReceiver : BroadcastReceiver() {
                     startTime = System.currentTimeMillis(),
                     type = android.provider.CallLog.Calls.OUTGOING_TYPE,
                     isIncoming = false,
+                    recordingAllowed = recordingAllowed,
                     serviceInstanceId = System.currentTimeMillis()
                 ).apply {
                     // Attach metadata if this call matches the pending dial request
-                    pendingDialMetaData?.let { (pendingNumber, meta) ->
-                        if (normalizeNumber(number) == normalizeNumber(pendingNumber)) {
-                            metaData = meta
-                            pendingDialMetaData = null // Consume it
-                        }
-                    }
+                    metaData = CallCaptureJournal.takeDial(context, number)
                 }
             }
             "android.intent.action.PHONE_STATE" -> {
@@ -95,6 +139,11 @@ class CallReceiver : BroadcastReceiver() {
                 if (incomingNumber != null && state == TelephonyManager.CALL_STATE_RINGING) {
                     // Incoming call ringing
                     val active = currentCallData
+                    if (active != null && lastCallState == TelephonyManager.CALL_STATE_RINGING &&
+                        active.number == incomingNumber && !active.isSaved) {
+                        // Android can deliver PHONE_STATE twice (with and without number).
+                        return
+                    }
                     if (active != null && active.wasAnswered && !active.isSaved) {
                         // Current call is active, this is an interruption
                         active.wasOnHold = true
@@ -106,6 +155,7 @@ class CallReceiver : BroadcastReceiver() {
                         startTime = System.currentTimeMillis(),
                         type = android.provider.CallLog.Calls.INCOMING_TYPE,
                         isIncoming = true,
+                        recordingAllowed = recordingAllowed,
                         serviceInstanceId = System.currentTimeMillis()
                     )
                 }
@@ -134,6 +184,7 @@ class CallReceiver : BroadcastReceiver() {
                         startTime = System.currentTimeMillis(),
                         type = android.provider.CallLog.Calls.OUTGOING_TYPE,
                         isIncoming = false,
+                        recordingAllowed = recordingAllowed,
                         serviceInstanceId = System.currentTimeMillis()
                     )
                 }
@@ -147,10 +198,8 @@ class CallReceiver : BroadcastReceiver() {
                         callData.answeredTime = System.currentTimeMillis()
 
                         // Start/Notify recording service
-                        CoroutineScope(Dispatchers.IO).launch {
-                            val config = sessionManager.getRegistration().first()
-                            startRecording(context, callData, config?.recordingEnabled ?: true)
-                        }
+                        persist(context)
+                        if (callData.recordingAllowed) startRecording(context, callData, true)
                     }
                 }
             }
@@ -203,13 +252,16 @@ class CallReceiver : BroadcastReceiver() {
             putExtra(CallRecorderService.EXTRA_RECORDING_ENABLED, recordingEnabled)
         }
         try {
-            context.startForegroundService(intent)
+            ContextCompat.startForegroundService(context, intent)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start CallRecorderService for ACTION_START", e)
         }
     }
 
     private fun stopRecording(context: Context, callData: CallData) {
+        // Persist completion before any restricted microphone-service operation.
+        CallCaptureJournal.complete(context, callData)
+        if (!callData.recordingAllowed) return
         val callId = "${callData.number}|${callData.startTime}|${callData.type}"
 
         // Prevent duplicate processing of the same call

@@ -147,8 +147,10 @@ class CallRecorderService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && e is android.app.ForegroundServiceStartNotAllowedException) {
                 // App is not in a state where it can start a foreground service
             }
-            // FIX: Return START_STICKY to ensure service restarts on kill
-            return START_STICKY
+            // A denied microphone start must not discard the completed call metadata.
+            com.callmap.agenttracker.data.worker.CallReconciliationWorker.enqueue(applicationContext)
+            stopSelf(startId)
+            return START_NOT_STICKY
         }
 
         when (action) {
@@ -314,6 +316,9 @@ class CallRecorderService : Service() {
                 val fileName = "call_${System.currentTimeMillis()}.wav"
                 localFile = FileUtils.getRecordingFile(applicationContext, fileName)
                 recordingFile = localFile
+                activeRecordingCallId?.let { id ->
+                    com.callmap.agenttracker.data.local.CallCaptureJournal.rememberRecording(applicationContext, id, localFile.absolutePath)
+                }
 
                 localFos = FileOutputStream(localFile)
                 localFos.write(ByteArray(44)) // Dummy header
@@ -414,27 +419,26 @@ class CallRecorderService : Service() {
 
         // 2. Fetch CallLog (Retry up to 20s)
         val callLogDetails = getSystemCallLogDetails(number, startTime, type)
+        if (callLogDetails == null) {
+            // Keep the durable journal/audio and let recovery use a stable system-row ID.
+            // A speculative second ID here would duplicate the call when CallLog arrives.
+            com.callmap.agenttracker.data.worker.CallReconciliationWorker.enqueue(applicationContext)
+            return
+        }
 
-        val finalCallerName = callLogDetails?.name ?: getContactName(number) ?: "Unknown"
-        val finalNumber = callLogDetails?.number ?: number
-        val systemDuration = callLogDetails?.duration ?: 0L
-        val logStartTime = callLogDetails?.timestamp ?: startTime
+        val finalCallerName = callLogDetails.name ?: getContactName(number) ?: "Unknown"
+        val finalNumber = callLogDetails.number ?: number
+        val systemDuration = callLogDetails.duration
+        val logStartTime = callLogDetails.timestamp
 
         val internalFileValid = internalFile?.exists() == true && FileUtils.getAudioDuration(internalFile) > 0
         val internalFileDuration = if (internalFileValid) FileUtils.getAudioDuration(internalFile) else 0L
 
         // Source of truth for answered status and type
-        val finalType = callLogDetails?.type ?: type
+        val finalType = callLogDetails.type
 
         // Picked up means the receiver actually answered (talk time > 0)
-        val wasActuallyPickedUp = if (systemDuration > 0) {
-            true
-        } else if (callLogDetails == null) {
-            // Fallback for incoming calls if system log failed to fetch
-            wasAnswered && finalType == CallLog.Calls.INCOMING_TYPE
-        } else {
-            false
-        }
+        val wasActuallyPickedUp = systemDuration > 0
 
         val logEndTime = if (systemDuration > 0) logStartTime + (systemDuration * 1000) else endTime
 
@@ -442,7 +446,7 @@ class CallRecorderService : Service() {
         var isMismatch = false
 
         // 3. BEST-FIT LOGIC: Compare OEM and Internal
-        val bestOemFile = if (callLogDetails != null) {
+        val bestOemFile = if (registration.recordingEnabled) {
             FileUtils.findBestSystemRecording(logEndTime, systemDuration, finalNumber, finalCallerName)
         } else null
 
@@ -489,13 +493,6 @@ class CallRecorderService : Service() {
             else -> null
         }
 
-        // Only proceed if recording is enabled
-        if (!registration.recordingEnabled) {
-            Log.d(TAG, "Recording disabled globally. Skipping save for $callId")
-            internalFile?.delete()
-            return
-        }
-
         // We save the log regardless of recordingEnabled, but we only attach a file if enabled and picked up
         val finalFilePath = if (registration.recordingEnabled && wasActuallyPickedUp) {
             finalRecordingPath
@@ -508,7 +505,7 @@ class CallRecorderService : Service() {
             null
         }
 
-        val uniqueId = FileUtils.generateUniqueId(registration.deviceUuid, startStr, endStr, finalNumber, finalType)
+        val uniqueId = com.callmap.agenttracker.util.CallIdentity.fromSystemLog(registration.deviceUuid, callLogDetails.id, logStartTime)
 
         // Fetch SIM details for this call
         // Even if callLogDetails or subId is null, we try to resolve it (e.g. fallback for single-SIM devices)
@@ -529,6 +526,7 @@ class CallRecorderService : Service() {
                 callerName = finalCallerName,
                 durationMismatch = isMismatch,
                 recordingFilePath = finalFilePath,
+                recordingAllowed = registration.recordingEnabled,
                 syncStatus = SyncStatus.PENDING,
                 wasOnHold = wasOnHold,
                 interruptedNumbers = interruptedNumbers.ifEmpty { null },
@@ -586,6 +584,7 @@ class CallRecorderService : Service() {
         repeat(maxRetries) { attempt ->
             try {
                 val projection = arrayOf(
+                    CallLog.Calls._ID,
                     CallLog.Calls.NUMBER,
                     CallLog.Calls.DATE,
                     CallLog.Calls.DURATION,
@@ -645,7 +644,8 @@ class CallRecorderService : Service() {
                         }
 
                         if (isMatch) {
-                            candidates.add(SystemCallLogInfo(logNumber, contactName, logDuration, type, logStart, subId))
+                            candidates.add(SystemCallLogInfo(logNumber, contactName, logDuration, type, logStart, subId,
+                                cursor.getLong(cursor.getColumnIndexOrThrow(CallLog.Calls._ID))))
                         }
                     }
                 }
@@ -664,7 +664,7 @@ class CallRecorderService : Service() {
         return null
     }
 
-    private data class SystemCallLogInfo(val number: String?, val name: String?, val duration: Long, val type: Int, val timestamp: Long, val subId: String?)
+    private data class SystemCallLogInfo(val number: String?, val name: String?, val duration: Long, val type: Int, val timestamp: Long, val subId: String?, val id: Long)
 
     private fun normalizeNumber(number: String?): String {
         return number?.filter { it.isDigit() }?.takeLast(10) ?: ""

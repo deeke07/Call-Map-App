@@ -135,6 +135,7 @@ class DeviceEventRepositoryImpl @Inject constructor(
             }
 
             val request = DeviceEventRequest(
+                client_event_id = event.clientEventId,
                 device_uuid = event.deviceUuid,
                 event_type = event.eventType,
                 event_time = event.eventTime,

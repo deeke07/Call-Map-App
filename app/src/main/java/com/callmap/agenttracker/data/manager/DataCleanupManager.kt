@@ -60,7 +60,8 @@ class DataCleanupManager @Inject constructor(
                     // Delete recording file if it exists and belongs to this app
                     log.recordingFilePath?.let { path ->
                         try {
-                            if (FileUtils.isAppRecording(context, path)) {
+                            if (FileUtils.isAppRecording(context, path) &&
+                                callLogDao.getProtectedRecordingPaths().none { File(it).canonicalPath == File(path).canonicalPath }) {
                                 val file = File(path)
                                 if (file.exists() && file.delete()) {
                                     Log.d(TAG, "Deleted recording file: $path")
@@ -104,38 +105,14 @@ class DataCleanupManager @Inject constructor(
     }
 
     /**
-     * Clean up failed/abandoned call recordings (older than 24 hours).
-     * These are files not associated with any DB record.
+     * Never infer upload success from age. An unreferenced recording can belong to
+     * an interrupted call that reconciliation has not recovered yet. Only the
+     * server-confirmed cleanup paths above may delete recordings automatically.
      */
     suspend fun cleanupOrphanRecordings(): Int {
-        return try {
-            val recordingFolder = FileUtils.getPublicRecordingFolder(context)
-            val oldTime = System.currentTimeMillis() - (24 * 60 * 60 * 1000) // 24 hours ago
-
-            var deletedCount = 0
-            recordingFolder.listFiles()?.forEach { file ->
-                if (file.isFile && FileUtils.isAppRecording(context, file.absolutePath)) {
-                    if (file.lastModified() < oldTime) {
-                        if (file.delete()) {
-                            deletedCount++
-                            Log.d(TAG, "Deleted orphan recording: ${file.name}")
-                        }
-                    }
-                }
-            }
-
-            if (deletedCount > 0) {
-                Log.i(TAG, "Cleaned up $deletedCount orphan recordings")
-            }
-
-            deletedCount
-        } catch (e: Exception) {
-            Log.e(TAG, "Error cleaning up orphan recordings", e)
-            0
-        }
+        return 0
     }
 }
-
 
 
 

@@ -16,6 +16,7 @@ data class BulkLocationRequest(
 )
 
 data class LocationItem(
+    @SerializedName("client_event_id") val clientEventId: String,
     @SerializedName("latitude") val latitude: Double,
     @SerializedName("longitude") val longitude: Double,
     @SerializedName("battery_level") val batteryLevel: Int?,

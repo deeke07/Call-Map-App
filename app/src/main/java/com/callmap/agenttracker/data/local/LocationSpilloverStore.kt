@@ -26,6 +26,7 @@ class LocationSpilloverStore @Inject constructor(
     suspend fun append(location: LocationEntity, source: String) = withContext(Dispatchers.IO) {
         val line = gson.toJson(
             SpillLine(
+                clientEventId = location.clientEventId,
                 latitude = location.latitude,
                 longitude = location.longitude,
                 batteryLevel = location.batteryLevel,
@@ -58,6 +59,7 @@ class LocationSpilloverStore @Inject constructor(
     }
 
     data class SpillLine(
+        @SerializedName("clientEventId") val clientEventId: String? = null,
         @SerializedName("latitude") val latitude: Double,
         @SerializedName("longitude") val longitude: Double,
         @SerializedName("batteryLevel") val batteryLevel: Int?,
@@ -65,6 +67,9 @@ class LocationSpilloverStore @Inject constructor(
         @SerializedName("source") val source: String = "spillover"
     ) {
         fun toEntity() = LocationEntity(
+            clientEventId = clientEventId ?: java.util.UUID.nameUUIDFromBytes(
+                "legacy-spill:$recordedAt:$latitude:$longitude:$batteryLevel".toByteArray(Charsets.UTF_8)
+            ).toString(),
             latitude = latitude,
             longitude = longitude,
             batteryLevel = batteryLevel,

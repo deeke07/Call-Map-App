@@ -13,5 +13,6 @@ data class DeviceEventEntity(
     val metadata: String? = null, // JSON string
     val syncStatus: SyncStatus = SyncStatus.PENDING,
     val retryCount: Int = 0,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    @androidx.room.ColumnInfo(defaultValue = "''") val clientEventId: String = java.util.UUID.randomUUID().toString()
 )

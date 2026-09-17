@@ -11,5 +11,6 @@ data class LocationEntity(
     val longitude: Double,
     val batteryLevel: Int?,
     val recordedAt: String,
-    val syncStatus: SyncStatus = SyncStatus.PENDING
+    val syncStatus: SyncStatus = SyncStatus.PENDING,
+    @androidx.room.ColumnInfo(defaultValue = "''") val clientEventId: String = java.util.UUID.randomUUID().toString()
 )

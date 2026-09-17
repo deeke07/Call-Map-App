@@ -28,6 +28,7 @@ class SyncManagerImpl @Inject constructor(
     private val scope = CoroutineScope(Dispatchers.IO)
 
     override fun setupBackgroundSync() {
+        CallReconciliationWorker.schedule(context)
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()

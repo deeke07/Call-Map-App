@@ -73,6 +73,7 @@ class AppInitializerImpl @Inject constructor(
             // without waiting for WorkManager or Alarms to fire.
             try {
                 val settings = sessionManager.getRegistration().first()
+                settings?.let { com.callmap.agenttracker.data.local.CallCaptureJournal.begin(context, it.deviceUuid) }
                 val trackingEnabled = settings?.trackingEnabled == true
                 
                 TrackingLog.d("AppInitializer", "trackingEnabled=$trackingEnabled")

@@ -30,5 +30,6 @@ data class CallLogEntity(
     val deviceSimUuid: String? = null,
     val simSlot: Int? = null,
     val carrierName: String? = null,
-    val retryCount: Int = 0
+    val retryCount: Int = 0,
+    @androidx.room.ColumnInfo(defaultValue = "1") val recordingAllowed: Boolean = true
 )

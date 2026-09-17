@@ -25,6 +25,7 @@ interface CallApi {
     @POST("/api/public/calls")
     suspend fun submitCallLog(
         @Part("device_uuid") deviceUuid: RequestBody,
+        @Part("client_event_id") clientEventId: RequestBody,
         @Part("device_sim_uuid") deviceSimUuid: RequestBody?,
         @Part("sim_slot") simSlot: RequestBody?,
         @Part("carrier_name") carrierName: RequestBody?,

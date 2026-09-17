@@ -33,7 +33,7 @@ object CallMapper {
             call_type = mappedType,
             call_duration = callLog.callDuration,
             // Only send the recording file if the call was actually answered
-            call_recording_file = if (isAnswered && fileExists) callLog.recordingFilePath else null,
+            call_recording_file = if (callLog.recordingAllowed && isAnswered && fileExists) callLog.recordingFilePath else null,
             call_answered_at = callLog.callAnsweredAt,
             was_on_hold = if (callLog.wasOnHold) "1" else "0",
             interrupted_numbers = callLog.interruptedNumbers

@@ -35,7 +35,7 @@ class CallRepositoryImpl @Inject constructor(
     }
 
     override suspend fun saveCallLog(callLog: CallLogEntity): Long {
-        return dao.insertCallLog(callLog)
+        return dao.saveCapturedCall(callLog)
     }
 
     override suspend fun exists(uniqueId: String): Boolean {
@@ -91,12 +91,13 @@ class CallRepositoryImpl @Inject constructor(
             }
 
             val response = api.submitCallLog(
-                deviceUuid, deviceSimUuid, simSlot, carrierName, clientNumber, callType, callDuration, callStartedAt, callEndedAt,
+                deviceUuid, callLog.uniqueId.toRequestBody("text/plain".toMediaTypeOrNull()),
+                deviceSimUuid, simSlot, carrierName, clientNumber, callType, callDuration, callStartedAt, callEndedAt,
                 callAnsweredAt, callerName, durationMismatch, wasOnHold, interruptedNumbers,
                 spotSettingVersion, apkVersion, latitude, longitude, batteryLevel, metaData, recordingPart
             )
 
-            if (response.isSuccessful) {
+            if (response.isSuccessful && response.body()?.get("success")?.asBoolean == true) {
                 dao.updateSyncStatus(callLog.uniqueId, SyncStatus.SYNCED)
                 Log.i(TAG, "Uploaded Call Success: ${response.body()}")
                 Result.success(Unit)
@@ -146,13 +147,8 @@ class CallRepositoryImpl @Inject constructor(
             }
         }
 
-        // 2. Cleanup old internal recordings (> 24h)
-        val internalFolder = FileUtils.getPublicRecordingFolder(context)
-        internalFolder.listFiles()?.forEach { file ->
-            if (file.isFile && FileUtils.isAppRecording(context, file.absolutePath)) {
-                FileUtils.deleteOldFile(file)
-            }
-        }
+        // Unattached files may belong to a call interrupted by process death.
+        // Age alone is not proof of upload: delete only server-confirmed recordings.
     }
 
     override suspend fun uploadPendingCallLogs(context: android.content.Context): Result<Unit> {
@@ -182,7 +178,8 @@ class CallRepositoryImpl @Inject constructor(
                             totalSuccess++
                             // Cleanup internal files
                             log.recordingFilePath?.let { path ->
-                                if (FileUtils.isAppRecording(context, path)) {
+                                if (FileUtils.isAppRecording(context, path) &&
+                                    dao.getProtectedRecordingPaths().none { File(it).canonicalPath == File(path).canonicalPath }) {
                                     File(path).let { if (it.exists()) it.delete() }
                                 }
                             }
